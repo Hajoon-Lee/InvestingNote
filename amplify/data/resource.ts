@@ -8,6 +8,27 @@ const schema = a.schema({
       done: a.boolean().required(),
     })
     .authorization(allow => [allow.publicApiKey()]),
+
+  InvestmentIdeaGroup: a
+    .model({
+      stockName: a.string().required(),
+      ticker: a.string().required(),
+      position: a.string().required(),
+      status: a.string().required(),
+      openDate: a.string().required(),
+      closeDate: a.string(),
+    })
+    .authorization(allow => [allow.publicApiKey()]),
+
+  InvestmentMemo: a
+    .model({
+      ideaGroupId: a.string().required(),
+      ticker: a.string().required(),
+      memoType: a.string().required(),
+      thesis: a.string().required(),
+      risk: a.string().required(),
+    })
+    .authorization(allow => [allow.publicApiKey()]),
 })
 
 export type Schema = ClientSchema<typeof schema>

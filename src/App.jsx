@@ -33,17 +33,49 @@ const MOCK_STOCKS = [
 const calcHoldingDays = (openDate, closeDate) =>
   Math.max(0, Math.floor(((closeDate ? new Date(closeDate) : new Date()) - new Date(openDate)) / 86400000))
 
-const calcReturn = (position, ticker, openDate, closeDate) => {
-  const openPrice = priceService.getClosePriceOnOrBeforeDate(ticker, openDate)
-  const endPrice = closeDate
-    ? priceService.getClosePriceOnOrBeforeDate(ticker, closeDate)
-    : priceService.getLatestClosePrice(ticker)
+const calcReturnFromPrices = (position, openPrice, endPrice) => {
   if (!openPrice || !endPrice) return null
   if (position === 'LONG') return ((endPrice - openPrice) / openPrice * 100).toFixed(1)
   return ((openPrice - endPrice) / openPrice * 100).toFixed(1)
 }
 
 const formatPrice = (n) => (n != null ? n.toLocaleString('ko-KR') : null)
+
+// ── 아이디어별 가격 데이터 훅 ─────────────────────────────
+function useIdeaPrices(ideaGroups) {
+  const [prices, setPrices] = useState({})
+
+  useEffect(() => {
+    if (!ideaGroups.length) return
+    let cancelled = false
+
+    const fetchAll = async () => {
+      const results = {}
+      await Promise.all(
+        ideaGroups.map(async (idea) => {
+          try {
+            const [openPrice, endPrice, history] = await Promise.all([
+              priceService.getClosePriceOnOrBeforeDate(idea.ticker, idea.openDate),
+              idea.closeDate
+                ? priceService.getClosePriceOnOrBeforeDate(idea.ticker, idea.closeDate)
+                : priceService.getLatestClosePrice(idea.ticker),
+              priceService.getPriceHistory(idea.ticker, idea.openDate, idea.closeDate),
+            ])
+            results[idea.id] = { openPrice, endPrice, history, error: false }
+          } catch {
+            results[idea.id] = { openPrice: null, endPrice: null, history: [], error: true }
+          }
+        })
+      )
+      if (!cancelled) setPrices(results)
+    }
+
+    fetchAll()
+    return () => { cancelled = true }
+  }, [ideaGroups])
+
+  return prices
+}
 
 // ── 캘린더 타일 콘텐츠 ─────────────────────────────────────
 function TileContent({ date, todos }) {
@@ -146,6 +178,8 @@ export default function App() {
   const [updateForm, setUpdateForm] = useState({ thesis: '', risk: '' })
   const [showCloseForm, setShowCloseForm] = useState(false)
   const [closeForm, setCloseForm] = useState({ thesis: '', risk: '' })
+
+  const ideaPrices = useIdeaPrices(ideaGroups)
 
   // generateClient()는 반드시 Amplify.configure() 이후에 호출해야 하므로
   // 모듈 최상단이 아닌 useEffect(컴포넌트 마운트 이후)에서 초기화한다.
@@ -432,12 +466,12 @@ export default function App() {
                       <h4 className="text-sm font-semibold text-slate-700">메모 추가</h4>
                       <textarea
                         className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 placeholder-slate-300 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition resize-none"
-                        rows={3} placeholder="투자논리 업데이트" value={updateForm.thesis}
+                        rows={3} placeholder={"1. 왜 싸다고 생각하는가? (Valuation)\n2. 언제 시장이 알아줄 것인가? (Catalyst)\n3. 시장이 틀린 점은 무엇인가? (Variant Perception)"} value={updateForm.thesis}
                         onChange={e => setUpdateForm(f => ({ ...f, thesis: e.target.value }))}
                       />
                       <textarea
                         className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 placeholder-slate-300 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition resize-none"
-                        rows={2} placeholder="리스크 업데이트" value={updateForm.risk}
+                        rows={2} placeholder="무엇이 틀릴 수 있는가?" value={updateForm.risk}
                         onChange={e => setUpdateForm(f => ({ ...f, risk: e.target.value }))}
                       />
                       <div className="flex justify-end gap-2">
@@ -476,19 +510,21 @@ export default function App() {
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
                   <h3 className="text-sm font-semibold text-slate-700 mb-3">Performance</h3>
                   {(() => {
-                    const openPrice = priceService.getClosePriceOnOrBeforeDate(selectedIdea.ticker, selectedIdea.openDate)
-                    const endPrice = selectedIdea.closeDate
-                      ? priceService.getClosePriceOnOrBeforeDate(selectedIdea.ticker, selectedIdea.closeDate)
-                      : priceService.getLatestClosePrice(selectedIdea.ticker)
-                    const ret = calcReturn(selectedIdea.position, selectedIdea.ticker, selectedIdea.openDate, selectedIdea.closeDate)
+                    const pd = ideaPrices[selectedIdea.id]
+                    const openPrice = pd?.openPrice ?? null
+                    const endPrice = pd?.endPrice ?? null
+                    const prices = pd?.history ?? []
+                    const ret = calcReturnFromPrices(selectedIdea.position, openPrice, endPrice)
                     const days = calcHoldingDays(selectedIdea.openDate, selectedIdea.closeDate)
-                    const prices = priceService.getPriceHistory(selectedIdea.ticker, selectedIdea.openDate, selectedIdea.closeDate)
+                    const priceLoading = !pd
                     return (
                       <>
                         <div className="flex flex-wrap gap-6 mb-4">
                           <div>
                             <p className="text-xs text-slate-400 mb-1">Return</p>
-                            {ret != null ? (
+                            {priceLoading ? (
+                              <p className="text-sm font-medium text-slate-300">-</p>
+                            ) : ret != null ? (
                               <p className={`text-xl font-bold ${Number(ret) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                                 {Number(ret) >= 0 ? '+' : ''}{ret}%
                               </p>
@@ -502,7 +538,9 @@ export default function App() {
                           </div>
                           <div>
                             <p className="text-xs text-slate-400 mb-1">Open Price</p>
-                            {openPrice != null ? (
+                            {priceLoading ? (
+                              <p className="text-sm text-slate-300">-</p>
+                            ) : openPrice != null ? (
                               <p className="text-sm font-semibold text-slate-600">{formatPrice(openPrice)}</p>
                             ) : (
                               <p className="text-sm text-slate-400">가격 데이터 연결 전</p>
@@ -510,7 +548,9 @@ export default function App() {
                           </div>
                           <div>
                             <p className="text-xs text-slate-400 mb-1">{selectedIdea.closeDate ? 'Close Price' : 'Current Price'}</p>
-                            {endPrice != null ? (
+                            {priceLoading ? (
+                              <p className="text-sm text-slate-300">-</p>
+                            ) : endPrice != null ? (
                               <p className="text-sm font-semibold text-slate-600">{formatPrice(endPrice)}</p>
                             ) : (
                               <p className="text-sm text-slate-400">가격 데이터 연결 전</p>
@@ -519,7 +559,9 @@ export default function App() {
                         </div>
                         <div className="rounded-xl bg-slate-50 p-3">
                           <p className="text-xs text-slate-400 mb-2">Price Chart</p>
-                          {prices.length > 0 ? (
+                          {priceLoading ? (
+                            <p className="text-sm text-slate-300 text-center py-6">-</p>
+                          ) : prices.length > 0 ? (
                             <MiniChart prices={prices} positive={ret != null && Number(ret) >= 0} />
                           ) : (
                             <p className="text-sm text-slate-400 text-center py-6">가격 데이터 연결 전</p>
@@ -656,7 +698,8 @@ export default function App() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {filteredIdeas.map(idea => {
                       const openMemo = ideaMemos.find(m => m.ideaGroupId === idea.id && m.memoType === 'OPEN')
-                      const ret = calcReturn(idea.position, idea.ticker, idea.openDate, idea.closeDate)
+                      const pd = ideaPrices[idea.id]
+                      const ret = pd ? calcReturnFromPrices(idea.position, pd.openPrice, pd.endPrice) : null
                       const days = calcHoldingDays(idea.openDate, idea.closeDate)
                       const isOpen = idea.status === 'OPEN'
                       return (

@@ -29,19 +29,19 @@ const seededRand = (seed) => {
 }
 
 const mockPriceService = {
-  getClosePriceOnOrBeforeDate(ticker, date) {
+  async getClosePriceOnOrBeforeDate(ticker, date) {
     const mp = MOCK_PRICES[ticker]
     if (!mp || !date) return null
     const rand = seededRand(hashCode(ticker + date))
     return Math.round(mp.base * (0.92 + rand() * 0.22))
   },
 
-  getLatestClosePrice(ticker) {
+  async getLatestClosePrice(ticker) {
     const mp = MOCK_PRICES[ticker]
     return mp ? mp.current : null
   },
 
-  getPriceHistory(ticker, startDate, endDate) {
+  async getPriceHistory(ticker, startDate, endDate) {
     const mp = MOCK_PRICES[ticker]
     if (!mp) return []
     const rand = seededRand(hashCode(ticker + startDate))

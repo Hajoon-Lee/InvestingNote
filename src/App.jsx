@@ -19,7 +19,7 @@ const todayKey = toKey(today)
 
 const TABS = ['일정관리', '투자메모', '예비 탭 2']
 const WORK_CATEGORIES = ['기업탐방', 'NDR/IR', '세미나', '보고서/제안서', '컴플라이언스', 'Presentation', '기타']
-const EVENT_CATEGORIES = ['실적발표', '매크로', '카탈리스트', '뉴스', '아이디어 점검', '수급/리밸런싱', '정책/규제']
+const EVENT_CATEGORIES = ['실적발표', '매크로', '카탈리스트', '뉴스', '아이디어 점검', '수급/리밸런싱', '정책/규제', '기타']
 const MOCK_STOCKS = [
   { name: '삼성전자', ticker: '005930.KS' },
   { name: 'SK하이닉스', ticker: '000660.KS' },
@@ -393,7 +393,7 @@ export default function App() {
 
         {/* ── 투자메모 탭 ── */}
         {activeTab === '투자메모' && (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-4">
             {selectedIdea ? (
               <>
                 {/* 뒤로가기 */}
@@ -414,11 +414,11 @@ export default function App() {
                       <h2 className="text-lg font-bold text-slate-800 truncate">{selectedIdea.stockName}</h2>
                       <p className="text-sm text-slate-400">{selectedIdea.ticker}</p>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0 ml-3">
-                      <span className={`text-xs font-semibold px-3 py-1 rounded-full ${
+                    <div className="flex items-center gap-1.5 shrink-0 ml-3">
+                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-md ${
                         selectedIdea.position === 'LONG' ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-500'
                       }`}>{selectedIdea.position}</span>
-                      <span className={`text-xs font-semibold px-3 py-1 rounded-full ${
+                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-md ${
                         selectedIdea.status === 'OPEN' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'
                       }`}>{selectedIdea.status}</span>
                     </div>
@@ -432,7 +432,7 @@ export default function App() {
 
                 {/* 타임라인 카드 */}
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
-                  <h3 className="text-sm font-semibold text-slate-700 mb-4">메모 타임라인</h3>
+                  <h3 className="text-sm font-bold text-slate-700 mb-4">메모 타임라인</h3>
                   <div>
                     {selectedMemos.map((memo, i) => (
                       <div key={memo.id} className="relative pl-8 pb-6 last:pb-0">
@@ -474,11 +474,11 @@ export default function App() {
                     <div className="flex gap-2 mt-4 pt-4 border-t border-slate-100">
                       <button
                         onClick={() => setShowUpdateForm(true)}
-                        className="flex-1 bg-blue-500 hover:bg-blue-600 active:scale-95 text-white text-sm font-medium py-2.5 rounded-xl transition-all"
+                        className="flex-1 bg-blue-500 hover:bg-blue-600 active:scale-[0.97] text-white text-sm font-medium py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/20"
                       >+ 메모 추가</button>
                       <button
                         onClick={() => setShowCloseForm(true)}
-                        className="flex-1 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-600 text-sm font-medium py-2.5 rounded-xl transition-all"
+                        className="flex-1 bg-slate-100 hover:bg-slate-200 active:scale-[0.97] text-slate-600 text-sm font-medium py-2.5 rounded-xl transition-all"
                       >Close Idea</button>
                     </div>
                   )}
@@ -530,7 +530,7 @@ export default function App() {
 
                 {/* Performance 카드 */}
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
-                  <h3 className="text-sm font-semibold text-slate-700 mb-3">Performance</h3>
+                  <h3 className="text-sm font-bold text-slate-700 mb-3">Performance</h3>
                   {(() => {
                     const pd = ideaPrices[selectedIdea.id]
                     const openPrice = pd?.openPrice ?? null
@@ -547,7 +547,7 @@ export default function App() {
                             {priceLoading ? (
                               <p className="text-sm font-medium text-slate-300">-</p>
                             ) : ret != null ? (
-                              <p className={`text-xl font-bold ${Number(ret) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                              <p className={`text-2xl font-bold tabular-nums ${Number(ret) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                                 {Number(ret) >= 0 ? '+' : ''}{ret}%
                               </p>
                             ) : (
@@ -556,7 +556,7 @@ export default function App() {
                           </div>
                           <div>
                             <p className="text-xs text-slate-400 mb-1">Holding Days</p>
-                            <p className="text-xl font-bold text-slate-700">{days}일</p>
+                            <p className="text-xl font-bold text-slate-700 tabular-nums">{days}일</p>
                           </div>
                           <div>
                             <p className="text-xs text-slate-400 mb-1">Open Price</p>
@@ -597,25 +597,27 @@ export default function App() {
             ) : (
               <>
                 {/* 목록 헤더 */}
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between mb-1">
                   <div>
-                    <h2 className="text-base font-semibold text-slate-800">투자메모</h2>
-                    <p className="text-xs text-slate-400 mt-0.5">
+                    <h2 className="text-lg font-bold text-slate-800 tracking-tight">투자메모</h2>
+                    <p className="text-xs text-slate-400 mt-1">
                       {ideasLoading ? '동기화 중...' : `총 ${ideaGroups.length}개 아이디어`}
                     </p>
                   </div>
                   <button
                     onClick={() => { setShowIdeaForm(true); setIdeaForm({ stockName: '', ticker: '', position: 'LONG', thesis: '', risk: '' }) }}
                     disabled={ideasLoading}
-                    className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all"
+                    className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.97] disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all shadow-sm shadow-emerald-500/20"
                   >+ 아이디어 오픈</button>
                 </div>
 
                 {/* 아이디어 오픈 폼 */}
                 {showIdeaForm && (
-                  <div className="bg-white rounded-2xl shadow-sm border border-emerald-200 p-5">
-                    <h3 className="text-sm font-semibold text-slate-700 mb-4">새 아이디어 오픈</h3>
-                    <div className="space-y-3">
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                      <h3 className="text-sm font-bold text-slate-800">새 아이디어 오픈</h3>
+                    </div>
+                    <div className="p-6 space-y-5">
                       <div className="relative">
                         <input
                           className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 placeholder-slate-300 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition"
@@ -654,15 +656,15 @@ export default function App() {
                         })()}
                       </div>
 
-                      <div className="flex gap-2">
+                      <div className="bg-slate-100 rounded-xl p-1 flex">
                         {['LONG', 'SHORT'].map(pos => (
                           <button
                             key={pos} type="button"
                             onClick={() => setIdeaForm(f => ({ ...f, position: pos }))}
-                            className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${
                               ideaForm.position === pos
-                                ? pos === 'LONG' ? 'bg-red-500 text-white' : 'bg-blue-500 text-white'
-                                : 'bg-slate-100 text-slate-400 hover:text-slate-600'
+                                ? 'bg-white shadow-sm ' + (pos === 'LONG' ? 'text-red-500' : 'text-blue-500')
+                                : 'text-slate-400 hover:text-slate-500'
                             }`}
                           >{pos}</button>
                         ))}
@@ -679,12 +681,12 @@ export default function App() {
                         onChange={e => setIdeaForm(f => ({ ...f, risk: e.target.value }))}
                       />
 
-                      <div className="flex justify-end gap-2 pt-1">
+                      <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                         <button onClick={() => setShowIdeaForm(false)}
-                          className="text-sm text-slate-400 hover:text-slate-600 px-4 py-2 rounded-xl transition-colors">취소</button>
+                          className="text-sm text-slate-400 hover:text-slate-600 px-4 py-2.5 rounded-xl transition-colors">취소</button>
                         <button onClick={openIdea}
                           disabled={!ideaForm.stockName.trim() || !ideaForm.ticker || !ideaForm.thesis.trim() || !ideaForm.risk.trim()}
-                          className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-5 py-2.5 rounded-xl transition-all"
+                          className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-6 py-2.5 rounded-xl transition-all shadow-sm shadow-emerald-500/20"
                         >아이디어 오픈</button>
                       </div>
                     </div>
@@ -711,10 +713,19 @@ export default function App() {
                 {ideasLoading ? (
                   <Spinner />
                 ) : filteredIdeas.length === 0 ? (
-                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm py-14 text-center">
-                    <p className="text-slate-300 text-sm">
+                  <div className="bg-white rounded-2xl border border-dashed border-slate-200 py-16 text-center">
+                    <div className="text-3xl mb-3 opacity-80">💡</div>
+                    <p className="text-slate-600 font-semibold text-sm mb-1">
                       {ideaGroups.length === 0 ? '아직 등록된 아이디어가 없습니다' : '해당하는 아이디어가 없습니다'}
                     </p>
+                    <p className="text-slate-400 text-xs leading-relaxed max-w-56 mx-auto mb-5">
+                      종목의 투자논리와 리스크를<br />체계적으로 기록해보세요.
+                    </p>
+                    {ideaGroups.length === 0 && (
+                      <button onClick={() => { setShowIdeaForm(true); setIdeaForm({ stockName: '', ticker: '', position: 'LONG', thesis: '', risk: '' }) }}
+                        className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.97] text-white text-xs font-medium px-4 py-2 rounded-xl transition-all shadow-sm shadow-emerald-500/20"
+                      >+ 아이디어 오픈</button>
+                    )}
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -726,38 +737,38 @@ export default function App() {
                       const isOpen = idea.status === 'OPEN'
                       return (
                         <div key={idea.id} onClick={() => setSelectedIdeaId(idea.id)}
-                          className={`bg-white rounded-2xl shadow-sm border p-4 cursor-pointer transition-all hover:shadow-md ${
-                            isOpen ? 'border-emerald-200 hover:border-emerald-300' : 'border-slate-200 hover:border-slate-300'
+                          className={`bg-white rounded-xl border border-slate-100 border-l-[3px] p-4 cursor-pointer transition-all hover:shadow-md hover:border-slate-200 ${
+                            isOpen ? 'border-l-emerald-400' : 'border-l-slate-300'
                           }`}
                         >
-                          <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center justify-between mb-2.5">
                             <div className="min-w-0">
-                              <span className="font-semibold text-slate-800 truncate block">{idea.stockName}</span>
+                              <span className="font-bold text-slate-800 truncate block">{idea.stockName}</span>
                               <span className="text-xs text-slate-400">{idea.ticker}</span>
                             </div>
-                            <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
-                              <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                            <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
                                 idea.position === 'LONG' ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-500'
                               }`}>{idea.position}</span>
-                              <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
                                 isOpen ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'
                               }`}>{idea.status}</span>
                             </div>
                           </div>
                           {openMemo && (
                             <div className="mb-3 space-y-1">
-                              <p className="text-sm text-slate-500 truncate"><span className="text-slate-400">논리: </span>{openMemo.thesis}</p>
-                              <p className="text-sm text-slate-500 truncate"><span className="text-slate-400">리스크: </span>{openMemo.risk}</p>
+                              <p className="text-sm text-slate-500 truncate"><span className="text-slate-400 text-xs">논리: </span>{openMemo.thesis}</p>
+                              <p className="text-sm text-slate-500 truncate"><span className="text-slate-400 text-xs">리스크: </span>{openMemo.risk}</p>
                             </div>
                           )}
-                          <div className="flex items-center gap-3 text-xs text-slate-400 pt-2 border-t border-slate-50">
+                          <div className="flex items-center gap-3 text-xs text-slate-400 pt-2.5 border-t border-slate-50">
                             {ret != null && (
-                              <span className={`font-semibold ${Number(ret) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                              <span className={`text-sm font-bold tabular-nums ${Number(ret) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                                 {Number(ret) >= 0 ? '+' : ''}{ret}%
                               </span>
                             )}
                             <span>{days}일</span>
-                            <span className="ml-auto">{idea.openDate}</span>
+                            <span className="ml-auto font-mono tabular-nums">{idea.openDate}</span>
                           </div>
                         </div>
                       )

@@ -13,8 +13,8 @@ export const auth = defineAuth({
           fullname: 'name',
         },
       },
-      callbackUrls: ['http://localhost:5173/'],
-      logoutUrls: ['http://localhost:5173/'],
+      callbackUrls: ['http://localhost:5173/', 'https://main.d30nxvxs21dtee.amplifyapp.com/'],
+      logoutUrls: ['http://localhost:5173/', 'https://main.d30nxvxs21dtee.amplifyapp.com/'],
     },
   },
 })

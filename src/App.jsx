@@ -19,7 +19,7 @@ const formatDisplay = (date) =>
 const today = new Date()
 const todayKey = toKey(today)
 
-const TABS = ['일정관리', '투자메모', '예비 탭 2']
+const TABS = ['Todo', 'Idea', 'Lake']
 const WORK_CATEGORIES = ['기업탐방', 'NDR/IR', '세미나', '보고서/제안서', '컴플라이언스', 'Presentation', '기타']
 const EVENT_CATEGORIES = ['실적발표', '매크로', '카탈리스트', '뉴스', '아이디어 점검', '수급/리밸런싱', '정책/규제', '기타']
 const MOCK_STOCKS = [
@@ -210,7 +210,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [backendError, setBackendError] = useState(false)
   const [selectedDate, setSelectedDate] = useState(today)
-  const [activeTab, setActiveTab] = useState('일정관리')
+  const [activeTab, setActiveTab] = useState('Todo')
   const [showScheduleForm, setShowScheduleForm] = useState(false)
   const [scheduleForm, setScheduleForm] = useState({
     type: '업무 일정', category: '기업탐방', date: todayKey, endDate: '', time: '', memo: '', linkedIdeaId: '',
@@ -228,6 +228,19 @@ export default function App() {
   const [updateForm, setUpdateForm] = useState({ thesis: '', risk: '' })
   const [showCloseForm, setShowCloseForm] = useState(false)
   const [closeForm, setCloseForm] = useState({ thesis: '', risk: '' })
+
+  const [lakeMemos, setLakeMemos] = useState([])
+  const [lakeLoading, setLakeLoading] = useState(true)
+  const [lakeInputText, setLakeInputText] = useState('')
+  const [lakePdfText, setLakePdfText] = useState('')
+  const [lakePdfName, setLakePdfName] = useState('')
+  const [lakePdfExtracting, setLakePdfExtracting] = useState(false)
+  const [lakeGenerating, setLakeGenerating] = useState(false)
+  const [lakeError, setLakeError] = useState('')
+  const [isDragging, setIsDragging] = useState(false)
+  const [lakeVisibleCount, setLakeVisibleCount] = useState(10)
+  const [lakeExpandedIds, setLakeExpandedIds] = useState(new Set())
+  const lakeFileInputRef = useRef(null)
 
   const ideaPrices = useIdeaPrices(ideaGroups)
 
@@ -275,10 +288,22 @@ export default function App() {
       error: (err) => console.error('Memo sync error:', err),
     })
 
+    const lakeSub = clientRef.current.models.LakeMemo.observeQuery().subscribe({
+      next: ({ items }) => {
+        setLakeMemos([...items])
+        setLakeLoading(false)
+      },
+      error: (err) => {
+        console.error('LakeMemo sync error:', err)
+        setLakeLoading(false)
+      },
+    })
+
     return () => {
       scheduleSub.unsubscribe()
       groupSub.unsubscribe()
       memoSub.unsubscribe()
+      lakeSub.unsubscribe()
     }
   }, [userId])
 
@@ -401,6 +426,84 @@ export default function App() {
     .filter(g => ideaStatusFilter === '전체' || g.status === ideaStatusFilter)
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
 
+  const sortedLakeMemos = [...lakeMemos].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+  const visibleLakeMemos = sortedLakeMemos.slice(0, lakeVisibleCount)
+  const hasMoreLakeMemos = sortedLakeMemos.length > lakeVisibleCount
+  const toggleLakeExpand = (id) => setLakeExpandedIds(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+
+  const extractTextFromPDF = async (file) => {
+    const pdfjsLib = await import('pdfjs-dist')
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+    const arrayBuffer = await file.arrayBuffer()
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    let text = ''
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i)
+      const content = await page.getTextContent()
+      text += content.items.map(item => item.str).join(' ') + '\n'
+    }
+    return text
+  }
+
+  const handlePdfFile = async (file) => {
+    if (!file || file.type !== 'application/pdf') {
+      setLakeError('PDF 파일만 지원됩니다.')
+      return
+    }
+    setLakePdfName(file.name)
+    setLakePdfText('')
+    setLakeError('')
+    setLakePdfExtracting(true)
+    try {
+      const text = await extractTextFromPDF(file)
+      if (!text.trim()) {
+        setLakeError('PDF에서 텍스트를 추출할 수 없습니다. 텍스트 기반 PDF만 지원됩니다.')
+        setLakePdfName('')
+        setLakePdfExtracting(false)
+        return
+      }
+      setLakePdfText(text)
+    } catch (err) {
+      console.error('PDF extraction error:', err)
+      setLakeError('PDF에서 텍스트를 추출할 수 없습니다.')
+      setLakePdfName('')
+    }
+    setLakePdfExtracting(false)
+  }
+
+  const handleGenerateLakeMemo = async () => {
+    const inputText = lakePdfText.trim() || lakeInputText.trim()
+    if (!inputText || !clientRef.current) return
+    setLakeGenerating(true)
+    setLakeError('')
+    try {
+      const { data: result, errors } = await clientRef.current.mutations.generateLakeMemo({ text: inputText })
+      if (errors?.length) throw new Error(errors[0].message)
+      await clientRef.current.models.LakeMemo.create({
+        title: result.title,
+        summary: result.summary,
+        keyPoints: result.keyPoints,
+      })
+      setLakeInputText('')
+      setLakePdfText('')
+      setLakePdfName('')
+      if (lakeFileInputRef.current) lakeFileInputRef.current.value = ''
+    } catch (err) {
+      console.error('Generate memo error:', err)
+      setLakeError('메모 생성에 실패했습니다. 다시 시도해주세요.')
+    }
+    setLakeGenerating(false)
+  }
+
+  const deleteLakeMemo = async (id) => {
+    if (!clientRef.current) return
+    await clientRef.current.models.LakeMemo.delete({ id })
+  }
+
   // 백엔드 미설정 상태
   if (authLoading) return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center">
@@ -448,19 +551,203 @@ export default function App() {
 
       <main className="max-w-4xl mx-auto px-4 py-6">
 
-        {/* ── 예비 탭 (미구현) ── */}
-        {activeTab === '예비 탭 2' && (
-          <div className="flex items-center justify-center min-h-64">
-            <div className="text-center bg-white rounded-2xl border border-slate-100 shadow-sm px-10 py-12">
-              <div className="text-3xl mb-3">🔧</div>
-              <p className="text-slate-500 font-medium">예비 기능입니다.</p>
-              <p className="text-slate-400 text-sm mt-1">준비 중입니다.</p>
+        {/* ── Lake 탭 ── */}
+        {activeTab === 'Lake' && (
+          <div className="flex flex-col gap-6">
+            {/* 입력 영역 */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+              <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                <h2 className="text-base font-bold text-slate-800">🌊 Add to Lake</h2>
+                <p className="text-xs text-slate-400 mt-1">뉴스, 리포트, 리서치 자료 등을 넣으면 AI가 한국어 투자 메모로 정리합니다</p>
+              </div>
+              <div className="p-6 space-y-4">
+                {!lakePdfName && (
+                  <textarea
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700 placeholder-slate-300 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition resize-none leading-relaxed"
+                    rows={6}
+                    placeholder="리서치 자료, 뉴스 기사, 보고서 등의 텍스트를 붙여넣으세요..."
+                    value={lakeInputText}
+                    onChange={e => { setLakeInputText(e.target.value); setLakeError('') }}
+                  />
+                )}
+
+                <div
+                  onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={e => {
+                    e.preventDefault()
+                    setIsDragging(false)
+                    const file = e.dataTransfer.files[0]
+                    if (file) handlePdfFile(file)
+                  }}
+                  onClick={() => !lakePdfName && lakeFileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-xl px-4 text-center transition-all ${
+                    lakePdfName
+                      ? 'border-emerald-300 bg-emerald-50/50 py-6 cursor-default'
+                      : isDragging
+                      ? 'border-blue-400 bg-blue-50 py-5 cursor-pointer'
+                      : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50 py-5 cursor-pointer'
+                  }`}
+                >
+                  {lakePdfName ? (
+                    <div className="flex flex-col items-center gap-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-emerald-700 font-semibold">📄 {lakePdfName}</span>
+                        <button
+                          onClick={e => {
+                            e.stopPropagation()
+                            setLakePdfName('')
+                            setLakePdfText('')
+                            if (lakeFileInputRef.current) lakeFileInputRef.current.value = ''
+                          }}
+                          className="text-slate-400 hover:text-red-400 transition-colors p-0.5"
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
+                            <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                          </svg>
+                        </button>
+                      </div>
+                      {lakePdfExtracting ? (
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-3 h-3 border-2 border-emerald-300 border-t-emerald-600 rounded-full animate-spin" />
+                          <span className="text-xs text-emerald-500">텍스트 추출 중...</span>
+                        </div>
+                      ) : lakePdfText ? (
+                        <span className="text-xs text-emerald-500 font-medium">✓ PDF 첨부 완료</span>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-sm text-slate-500 mb-1">
+                        {isDragging ? 'PDF 파일을 놓으세요' : 'PDF 파일을 드래그하거나 클릭하여 선택'}
+                      </p>
+                      <p className="text-xs text-slate-400">텍스트 기반 PDF만 지원됩니다</p>
+                    </div>
+                  )}
+                  <input
+                    ref={lakeFileInputRef}
+                    type="file"
+                    accept=".pdf"
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0]
+                      if (file) handlePdfFile(file)
+                    }}
+                  />
+                </div>
+
+                {lakeError && (
+                  <p className="text-sm text-red-500 bg-red-50 px-4 py-2 rounded-xl">{lakeError}</p>
+                )}
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    onClick={handleGenerateLakeMemo}
+                    disabled={(!lakeInputText.trim() && !lakePdfText.trim()) || lakeGenerating || lakePdfExtracting}
+                    className="bg-blue-500 hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-6 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/20 flex items-center gap-2"
+                  >
+                    {lakeGenerating && (
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    )}
+                    {lakeGenerating ? 'AI 분석 중...' : 'AI 메모 생성'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Feed */}
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800 tracking-tight">Lake Feed</h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {lakeLoading ? '동기화 중...' : `총 ${lakeMemos.length}개 메모`}
+                  </p>
+                </div>
+              </div>
+
+              {lakeLoading ? (
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm"><Spinner /></div>
+              ) : sortedLakeMemos.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-dashed border-slate-200 py-16 text-center">
+                  <div className="text-3xl mb-3 opacity-80">🌊</div>
+                  <p className="text-slate-600 font-semibold text-sm mb-1">아직 생성된 메모가 없습니다</p>
+                  <p className="text-slate-400 text-xs leading-relaxed max-w-56 mx-auto">
+                    리서치 자료를 입력하면<br />AI가 투자 메모를 작성합니다.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-4">
+                    {visibleLakeMemos.map(memo => {
+                      const isExpanded = lakeExpandedIds.has(memo.id)
+                      return (
+                        <div key={memo.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5 sm:px-6 sm:py-6 hover:shadow-md transition-all group">
+                          <div className="flex items-start justify-between mb-2">
+                            <h3 className="text-base font-bold text-slate-800 leading-snug pr-4">{memo.title}</h3>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-xs text-slate-400 font-mono tabular-nums whitespace-nowrap">
+                                {memo.createdAt ? new Date(memo.createdAt).toLocaleString('ko-KR', {
+                                  month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                                }) : ''}
+                              </span>
+                              <button
+                                onClick={() => deleteLakeMemo(memo.id)}
+                                className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition-all p-1 rounded-lg hover:bg-red-50"
+                              >
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
+                                  <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-sm text-slate-600 leading-relaxed line-clamp-3">{memo.summary}</p>
+
+                          {isExpanded && (
+                            <div className="bg-slate-50 rounded-xl px-4 py-4 sm:px-5 mt-4">
+                              <p className="text-xs font-semibold text-slate-500 mb-3">Key Points</p>
+                              <ul className="space-y-2.5">
+                                {(() => {
+                                  try { return JSON.parse(memo.keyPoints) } catch { return [] }
+                                })().map((point, i) => (
+                                  <li key={i} className="flex items-start gap-2.5 text-sm text-slate-800 leading-relaxed">
+                                    <span className="text-blue-500 mt-0.5 shrink-0 font-bold">•</span>
+                                    <span>{point}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          <button
+                            onClick={() => toggleLakeExpand(memo.id)}
+                            className="mt-3 text-xs text-blue-500 hover:text-blue-600 font-medium transition-colors"
+                          >
+                            {isExpanded ? '접기' : '자세히 보기'}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {hasMoreLakeMemos && (
+                    <div className="text-center mt-6">
+                      <button
+                        onClick={() => setLakeVisibleCount(c => c + 10)}
+                        className="text-sm text-slate-500 hover:text-slate-700 font-medium bg-white border border-slate-200 hover:border-slate-300 px-6 py-2.5 rounded-xl transition-all"
+                      >
+                        더 보기 ({sortedLakeMemos.length - lakeVisibleCount}개 남음)
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
         )}
 
         {/* ── 투자메모 탭 ── */}
-        {activeTab === '투자메모' && (
+        {activeTab === 'Idea' && (
           <div className="flex flex-col gap-4">
             {selectedIdea ? (
               <>
@@ -848,8 +1135,8 @@ export default function App() {
           </div>
         )}
 
-        {/* ── 일정관리 탭 ── */}
-        {activeTab === '일정관리' && (
+        {/* ── Todo 탭 ── */}
+        {activeTab === 'Todo' && (
           <div className="space-y-10">
 
             {/* ══════════════════════════════════════════════════

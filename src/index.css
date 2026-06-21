@@ -76,7 +76,7 @@
   justify-content: center;
   border-radius: 10px;
   position: relative;
-  transition: background 0.15s;
+  transition: background 0.15s, box-shadow 0.15s;
 }
 
 .react-calendar__tile abbr {
@@ -90,18 +90,22 @@
   background: #f1f5f9;
 }
 
-.react-calendar__tile--now {
-  background: #eff6ff !important;
+.react-calendar__tile--now:not(.react-calendar__tile--active) {
+  background: transparent !important;
 }
 
-.react-calendar__tile--now abbr {
-  color: #3b82f6 !important;
+.react-calendar__tile--now:not(.react-calendar__tile--active) abbr {
+  color: #2563eb !important;
   font-weight: 700;
+  background: #dbeafe;
+  border-radius: 8px;
+  padding: 2px 6px;
 }
 
 .react-calendar__tile--active {
   background: #3b82f6 !important;
   border-radius: 10px;
+  box-shadow: 0 1px 6px rgba(59, 130, 246, 0.3);
 }
 
 .react-calendar__tile--active abbr {

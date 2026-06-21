@@ -1,11 +1,15 @@
 import { a, defineData, type ClientSchema } from '@aws-amplify/backend'
 
 const schema = a.schema({
-  Todo: a
+  Schedule: a
     .model({
+      type: a.string().required(),
+      category: a.string().required(),
       date: a.string().required(),
-      text: a.string().required(),
-      done: a.boolean().required(),
+      endDate: a.string(),
+      time: a.string(),
+      memo: a.string(),
+      linkedIdeaId: a.string(),
     })
     .authorization(allow => [allow.publicApiKey()]),
 

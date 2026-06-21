@@ -17,8 +17,9 @@ const formatDisplay = (date) =>
 const today = new Date()
 const todayKey = toKey(today)
 
-const FILTERS = ['전체', '진행중', '완료']
-const TABS = ['할 일', '투자메모', '예비 탭 2']
+const TABS = ['일정관리', '투자메모', '예비 탭 2']
+const WORK_CATEGORIES = ['기업탐방', 'NDR/IR', '세미나', '보고서/제안서', '컴플라이언스', 'Presentation', '기타']
+const EVENT_CATEGORIES = ['실적발표', '매크로', '카탈리스트', '뉴스', '아이디어 점검', '수급/리밸런싱', '정책/규제']
 const MOCK_STOCKS = [
   { name: '삼성전자', ticker: '005930.KS' },
   { name: 'SK하이닉스', ticker: '000660.KS' },
@@ -78,23 +79,20 @@ function useIdeaPrices(ideaGroups) {
 }
 
 // ── 캘린더 타일 콘텐츠 ─────────────────────────────────────
-function TileContent({ date, todos }) {
+function TileContent({ date, schedules }) {
   const key = toKey(date)
-  const items = todos.filter(t => t.date === key)
+  const items = schedules.filter(s => {
+    if (s.endDate) return key >= s.date && key <= s.endDate
+    return s.date === key
+  })
   if (!items.length) return null
-  const doneAll = items.every(t => t.done)
+  const hasWork = items.some(s => s.type === '업무 일정')
+  const hasEvent = items.some(s => s.type === '투자 이벤트')
   return (
-    <span
-      className="tile-dot"
-      style={{
-        display: 'block',
-        width: 5,
-        height: 5,
-        borderRadius: '50%',
-        marginTop: 2,
-        background: doneAll ? '#10b981' : '#3b82f6',
-      }}
-    />
+    <div style={{ display: 'flex', gap: 2, justifyContent: 'center', marginTop: 2 }}>
+      {hasWork && <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#3b82f6', display: 'block' }} />}
+      {hasEvent && <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#f59e0b', display: 'block' }} />}
+    </div>
   )
 }
 
@@ -158,13 +156,15 @@ function MiniChart({ prices, positive }) {
 
 // ── 메인 앱 ───────────────────────────────────────────────
 export default function App() {
-  const [todos, setTodos] = useState([])
+  const [schedules, setSchedules] = useState([])
   const [loading, setLoading] = useState(true)
   const [backendError, setBackendError] = useState(false)
   const [selectedDate, setSelectedDate] = useState(today)
-  const [input, setInput] = useState('')
-  const [filter, setFilter] = useState('전체')
-  const [activeTab, setActiveTab] = useState('할 일')
+  const [activeTab, setActiveTab] = useState('일정관리')
+  const [showScheduleForm, setShowScheduleForm] = useState(false)
+  const [scheduleForm, setScheduleForm] = useState({
+    type: '업무 일정', category: '기업탐방', date: todayKey, endDate: '', time: '', memo: '', linkedIdeaId: '',
+  })
 
   const [ideaGroups, setIdeaGroups] = useState([])
   const [ideaMemos, setIdeaMemos] = useState([])
@@ -195,13 +195,13 @@ export default function App() {
       return
     }
 
-    const todoSub = clientRef.current.models.Todo.observeQuery().subscribe({
+    const scheduleSub = clientRef.current.models.Schedule.observeQuery().subscribe({
       next: ({ items }) => {
-        setTodos([...items])
+        setSchedules([...items])
         setLoading(false)
       },
       error: (err) => {
-        console.error('Amplify sync error:', err)
+        console.error('Schedule sync error:', err)
         setLoading(false)
       },
     })
@@ -223,43 +223,65 @@ export default function App() {
     })
 
     return () => {
-      todoSub.unsubscribe()
+      scheduleSub.unsubscribe()
       groupSub.unsubscribe()
       memoSub.unsubscribe()
     }
   }, [])
 
   const selectedKey = toKey(selectedDate)
-  const dateTodos = todos.filter(t => t.date === selectedKey)
-  const filtered = dateTodos.filter(t => {
-    if (filter === '진행중') return !t.done
-    if (filter === '완료') return t.done
-    return true
+  const dateSchedules = schedules.filter(s => {
+    if (s.endDate) return selectedKey >= s.date && selectedKey <= s.endDate
+    return s.date === selectedKey
+  }).sort((a, b) => {
+    if (a.time && b.time) return a.time.localeCompare(b.time)
+    if (a.time) return -1
+    if (b.time) return 1
+    return (a.createdAt || '').localeCompare(b.createdAt || '')
   })
-  const doneCount = dateTodos.filter(t => t.done).length
 
-  const addTodo = async () => {
-    const trimmed = input.trim()
-    if (!trimmed || !clientRef.current) return
-    setInput('')
-    await clientRef.current.models.Todo.create({ date: selectedKey, text: trimmed, done: false })
+  const addSchedule = async () => {
+    if (!scheduleForm.date || !clientRef.current) return
+    await clientRef.current.models.Schedule.create({
+      type: scheduleForm.type,
+      category: scheduleForm.category,
+      date: scheduleForm.date,
+      endDate: scheduleForm.endDate || null,
+      time: scheduleForm.time || null,
+      memo: scheduleForm.memo.trim() || null,
+      linkedIdeaId: scheduleForm.linkedIdeaId || null,
+    })
+    setShowScheduleForm(false)
+    setScheduleForm({ type: '업무 일정', category: '기업탐방', date: todayKey, endDate: '', time: '', memo: '', linkedIdeaId: '' })
   }
 
-  const toggleTodo = async (id, currentDone) => {
+  const deleteSchedule = async (id) => {
     if (!clientRef.current) return
-    await clientRef.current.models.Todo.update({ id, done: !currentDone })
+    await clientRef.current.models.Schedule.delete({ id })
   }
 
-  const deleteTodo = async (id) => {
-    if (!clientRef.current) return
-    await clientRef.current.models.Todo.delete({ id })
+  const upcomingSchedules = (() => {
+    const limit = new Date(today)
+    limit.setDate(limit.getDate() + 30)
+    const limitKey = toKey(limit)
+    return schedules
+      .filter(s => (s.endDate || s.date) >= todayKey && s.date <= limitKey)
+      .sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''))
+  })()
+
+  const calcDDay = (dateStr) => {
+    const diff = Math.ceil((new Date(dateStr + 'T00:00:00') - new Date(todayKey + 'T00:00:00')) / 86400000)
+    if (diff === 0) return 'D-Day'
+    if (diff > 0) return `D-${diff}`
+    return `D+${Math.abs(diff)}`
   }
 
-  const clearDone = async () => {
-    if (!clientRef.current) return
-    await Promise.all(
-      dateTodos.filter(t => t.done).map(t => clientRef.current.models.Todo.delete({ id: t.id }))
-    )
+  const dDayColor = (dateStr) => {
+    const diff = Math.ceil((new Date(dateStr + 'T00:00:00') - new Date(todayKey + 'T00:00:00')) / 86400000)
+    if (diff <= 0) return 'bg-red-500 text-white'
+    if (diff <= 3) return 'bg-orange-100 text-orange-700'
+    if (diff <= 7) return 'bg-amber-50 text-amber-600'
+    return 'bg-slate-100 text-slate-500'
   }
 
   // ── 투자메모 CRUD ──
@@ -747,174 +769,285 @@ export default function App() {
           </div>
         )}
 
-        {/* ── 할 일 탭 ── */}
-        {activeTab === '할 일' && (
-          <div className="flex flex-col lg:flex-row gap-4 lg:items-start">
+        {/* ── 일정관리 탭 ── */}
+        {activeTab === '일정관리' && (
+          <div className="space-y-10">
 
-            {/* ── 캘린더 카드 ── */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 lg:w-80 shrink-0">
-              <Calendar
-                onChange={setSelectedDate}
-                value={selectedDate}
-                locale="ko-KR"
-                calendarType="gregory"
-                showFixedNumberOfWeeks={false}
-                formatDay={(_locale, date) => date.getDate()}
-                tileContent={({ date, view }) =>
-                  view === 'month' ? <TileContent date={date} todos={todos} /> : null
-                }
-              />
-              <div className="flex gap-4 mt-4 pt-3 border-t border-slate-50 text-xs text-slate-400">
-                <span className="flex items-center gap-1">
-                  <span className="inline-block w-2 h-2 rounded-full bg-blue-400" />
-                  진행중
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
-                  모두 완료
-                </span>
-              </div>
-            </div>
-
-            {/* ── 날짜별 할 일 패널 ── */}
-            <div className="flex-1 min-w-0">
-
-              {/* 날짜 헤더 */}
-              <div className="flex items-center justify-between mb-3">
+            {/* ══════════════════════════════════════════════════
+                섹션 1: 다가오는 이벤트 (Dashboard Hero)
+               ══════════════════════════════════════════════════ */}
+            <section>
+              <div className="flex items-center justify-between mb-5">
                 <div>
-                  <h2 className="text-base font-semibold text-slate-800">
-                    {formatDisplay(selectedDate)}
+                  <h2 className="text-lg font-bold text-slate-800 tracking-tight flex items-center gap-2">
+                    <span className="text-base">🔥</span> 다가오는 이벤트
                   </h2>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    {loading
-                      ? '동기화 중...'
-                      : dateTodos.length === 0
-                      ? '할 일 없음'
-                      : `${dateTodos.length}개 중 ${doneCount}개 완료`}
+                  <p className="text-xs text-slate-400 mt-1">
+                    {loading ? '동기화 중...' : `Next 30 Days · ${upcomingSchedules.length}건`}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  {loading && (
-                    <span className="inline-block w-4 h-4 border-2 border-blue-200 border-t-blue-400 rounded-full animate-spin" />
-                  )}
-                  {selectedKey === todayKey && (
-                    <span className="text-xs font-medium text-blue-500 bg-blue-50 px-2.5 py-1 rounded-full">
-                      오늘
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* 입력 카드 */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 mb-3">
-                <div className="flex gap-2">
-                  <input
-                    className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 placeholder-slate-300 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition disabled:bg-slate-50"
-                    placeholder={`${formatDisplay(selectedDate)}에 추가할 일`}
-                    value={input}
-                    onChange={e => setInput(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && addTodo()}
-                    disabled={loading}
-                  />
-                  <button
-                    onClick={addTodo}
-                    disabled={loading || !input.trim()}
-                    className="bg-blue-500 hover:bg-blue-600 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-all whitespace-nowrap"
-                  >
-                    추가
-                  </button>
-                </div>
-              </div>
-
-              {/* 필터 탭 */}
-              <div className="flex gap-1 mb-3 bg-slate-100 rounded-xl p-1">
-                {FILTERS.map(f => (
-                  <button
-                    key={f}
-                    onClick={() => setFilter(f)}
-                    className={`flex-1 text-sm py-1.5 rounded-lg font-medium transition-all ${
-                      filter === f
-                        ? 'bg-white text-slate-800 shadow-sm'
-                        : 'text-slate-400 hover:text-slate-600'
-                    }`}
-                  >
-                    {f}
-                    {f !== '전체' && (
-                      <span className="ml-1 text-xs">
-                        ({f === '진행중'
-                          ? dateTodos.filter(t => !t.done).length
-                          : doneCount})
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-
-              {/* 할 일 목록 카드 */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                {loading ? (
-                  <Spinner />
-                ) : filtered.length === 0 ? (
-                  <div className="py-14 text-center">
-                    <p className="text-slate-300 text-sm">
-                      {filter === '완료'
-                        ? '완료된 항목이 없어요'
-                        : filter === '진행중'
-                        ? '모두 완료했어요!'
-                        : '이 날의 할 일을 추가해보세요'}
-                    </p>
-                  </div>
-                ) : (
-                  <ul className="divide-y divide-slate-50">
-                    {filtered.map(todo => (
-                      <li
-                        key={todo.id}
-                        className="flex items-center gap-3 px-4 py-3.5 hover:bg-slate-50 transition-colors group"
-                      >
-                        <button
-                          onClick={() => toggleTodo(todo.id, todo.done)}
-                          className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all ${
-                            todo.done
-                              ? 'bg-emerald-400 border-emerald-400'
-                              : 'border-slate-200 hover:border-blue-300'
-                          }`}
-                        >
-                          {todo.done && (
-                            <svg className="w-3 h-3 text-white" viewBox="0 0 12 12" fill="none">
-                              <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                            </svg>
-                          )}
-                        </button>
-                        <span
-                          className={`flex-1 text-sm leading-snug transition-colors ${
-                            todo.done ? 'line-through text-slate-300' : 'text-slate-700'
-                          }`}
-                        >
-                          {todo.text}
-                        </span>
-                        <button
-                          onClick={() => deleteTodo(todo.id)}
-                          className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition-all p-1 rounded-lg hover:bg-red-50"
-                        >
-                          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
-                            <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                          </svg>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              {!loading && doneCount > 0 && (
                 <button
-                  onClick={clearDone}
-                  className="mt-3 w-full text-xs text-slate-400 hover:text-red-400 py-2 transition-colors"
-                >
-                  완료된 항목 {doneCount}개 모두 삭제
-                </button>
+                  onClick={() => setShowScheduleForm(v => !v)}
+                  disabled={loading}
+                  className="bg-blue-500 hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all shadow-sm shadow-blue-500/20"
+                >+ 일정 추가</button>
+              </div>
+
+              {/* 일정 추가 폼 */}
+              {showScheduleForm && (
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 mb-5 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                    <h3 className="text-sm font-bold text-slate-800">새 일정</h3>
+                  </div>
+                  <div className="p-6 space-y-5">
+                    <div className="bg-slate-100 rounded-xl p-1 flex">
+                      {['업무 일정', '투자 이벤트'].map(t => (
+                        <button key={t} type="button"
+                          onClick={() => setScheduleForm(f => ({
+                            ...f, type: t,
+                            category: t === '업무 일정' ? WORK_CATEGORIES[0] : EVENT_CATEGORIES[0],
+                          }))}
+                          className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                            scheduleForm.type === t
+                              ? 'bg-white shadow-sm ' + (t === '업무 일정' ? 'text-blue-600' : 'text-amber-600')
+                              : 'text-slate-400 hover:text-slate-500'
+                          }`}
+                        >{t === '업무 일정' ? '🏢 ' : '📈 '}{t}</button>
+                      ))}
+                    </div>
+
+                    <div>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-500 mb-2">
+                        <svg className="w-3.5 h-3.5 text-slate-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 13H2V4h4l2 2h6v7z"/></svg>
+                        카테고리
+                      </label>
+                      <select value={scheduleForm.category}
+                        onChange={e => setScheduleForm(f => ({ ...f, category: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition bg-white"
+                      >
+                        {(scheduleForm.type === '업무 일정' ? WORK_CATEGORIES : EVENT_CATEGORIES).map(c => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-500 mb-2">
+                        <svg className="w-3.5 h-3.5 text-slate-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 7h12M5.5 1.5v3M10.5 1.5v3"/></svg>
+                        날짜 및 시간
+                      </label>
+                      <div className="flex gap-2">
+                        <div className="flex-1">
+                          <input type="date" value={scheduleForm.date}
+                            onChange={e => setScheduleForm(f => ({ ...f, date: e.target.value }))}
+                            className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition"
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1 pl-1">날짜</p>
+                        </div>
+                        <div className="flex-1">
+                          <input type="date" value={scheduleForm.endDate}
+                            onChange={e => setScheduleForm(f => ({ ...f, endDate: e.target.value }))}
+                            className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition"
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1 pl-1">종료일 (선택)</p>
+                        </div>
+                        <div className="flex-1">
+                          <input type="time" value={scheduleForm.time}
+                            onChange={e => setScheduleForm(f => ({ ...f, time: e.target.value }))}
+                            className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition"
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1 pl-1">시간 (선택)</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-500 mb-2">
+                        <svg className="w-3.5 h-3.5 text-slate-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 12.5h4M6.5 14h3M8 2a4.5 4.5 0 012.5 8.2V12h-5v-1.8A4.5 4.5 0 018 2z"/></svg>
+                        연결 아이디어
+                      </label>
+                      <select value={scheduleForm.linkedIdeaId}
+                        onChange={e => setScheduleForm(f => ({ ...f, linkedIdeaId: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition bg-white"
+                      >
+                        <option value="">연결 안 함</option>
+                        {ideaGroups.map(g => (
+                          <option key={g.id} value={g.id}>{g.stockName} ({g.ticker})</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-500 mb-2">
+                        <svg className="w-3.5 h-3.5 text-slate-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2l8.5-8.5z"/></svg>
+                        내용
+                      </label>
+                      <textarea
+                        className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700 placeholder-slate-300 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition resize-none leading-relaxed"
+                        rows={3} placeholder="일정 내용을 입력하세요" value={scheduleForm.memo}
+                        onChange={e => setScheduleForm(f => ({ ...f, memo: e.target.value }))}
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                      <button onClick={() => setShowScheduleForm(false)}
+                        className="text-sm text-slate-400 hover:text-slate-600 px-4 py-2.5 rounded-xl transition-colors">취소</button>
+                      <button onClick={addSchedule}
+                        className="bg-blue-500 hover:bg-blue-600 active:scale-[0.97] text-white text-sm font-medium px-6 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/20"
+                      >추가</button>
+                    </div>
+                  </div>
+                </div>
               )}
-            </div>
+
+              {/* 다가오는 이벤트 카드 */}
+              {loading ? (
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm"><Spinner /></div>
+              ) : upcomingSchedules.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-dashed border-slate-200 py-16 text-center">
+                  <div className="text-3xl mb-3 opacity-80">📅</div>
+                  <p className="text-slate-600 font-semibold text-sm mb-1">예정된 일정이 없습니다</p>
+                  <p className="text-slate-400 text-xs leading-relaxed max-w-56 mx-auto mb-5">
+                    기업탐방, 실적발표, 매크로 이벤트,<br />
+                    아이디어 점검 등을 기록해보세요.
+                  </p>
+                  <button onClick={() => setShowScheduleForm(true)}
+                    className="bg-blue-500 hover:bg-blue-600 active:scale-[0.97] text-white text-xs font-medium px-4 py-2 rounded-xl transition-all shadow-sm shadow-blue-500/20"
+                  >+ 일정 추가</button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {upcomingSchedules.map(s => {
+                    const linkedIdea = s.linkedIdeaId ? ideaGroups.find(g => g.id === s.linkedIdeaId) : null
+                    const isWork = s.type === '업무 일정'
+                    return (
+                      <div key={s.id} className={`bg-white rounded-xl border border-slate-100 border-l-[3px] p-4 hover:shadow-md hover:border-slate-200 transition-all group flex flex-col ${
+                        isWork ? 'border-l-blue-400' : 'border-l-amber-400'
+                      }`}>
+                        <div className="flex items-start justify-between mb-3">
+                          <span className={`inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-lg ${
+                            isWork ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-600'
+                          }`}>
+                            {isWork ? '🏢' : '📈'} {s.type}
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-md ${dDayColor(s.date)}`}>
+                              {calcDDay(s.date)}
+                            </span>
+                            <button onClick={() => deleteSchedule(s.id)}
+                              className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition-all p-1 rounded-lg hover:bg-red-50">
+                              <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
+                                <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-400 mb-1 font-medium">{s.category}</p>
+                        {s.memo && <p className="text-sm text-slate-800 font-medium leading-relaxed mb-3">{s.memo}</p>}
+                        <div className="flex items-center justify-between pt-2.5 border-t border-slate-50 mt-auto">
+                          <div>
+                            {linkedIdea && (
+                              <span className="inline-flex items-center gap-1 text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">
+                                💡 {linkedIdea.stockName}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-xs text-slate-400 font-mono tabular-nums">
+                            {s.date.replace(/-/g, '.')}{s.time ? ` ${s.time}` : ''}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </section>
+
+            {/* ══════════════════════════════════════════════════
+                섹션 2: 전체 일정 캘린더 (보조)
+               ══════════════════════════════════════════════════ */}
+            <section>
+              <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-4">
+                <span>📅</span> 전체 일정 캘린더
+              </h3>
+              <div className="flex flex-col lg:flex-row gap-5 lg:items-start">
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 lg:w-80 shrink-0">
+                  <Calendar
+                    onChange={setSelectedDate}
+                    value={selectedDate}
+                    locale="ko-KR"
+                    calendarType="gregory"
+                    showFixedNumberOfWeeks={false}
+                    formatDay={(_locale, date) => date.getDate()}
+                    tileContent={({ date, view }) =>
+                      view === 'month' ? <TileContent date={date} schedules={schedules} /> : null
+                    }
+                  />
+                  <div className="flex gap-5 mt-4 pt-3 border-t border-slate-100 text-xs text-slate-500">
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block w-2 h-2 rounded-full bg-blue-500" />
+                      업무 일정
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
+                      투자 이벤트
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-800">{formatDisplay(selectedDate)}</h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {dateSchedules.length === 0 ? '일정 없음' : `${dateSchedules.length}건`}
+                      </p>
+                    </div>
+                    {selectedKey === todayKey && (
+                      <span className="text-[10px] font-bold tracking-widest text-blue-500 bg-blue-50 px-2.5 py-1 rounded-md">TODAY</span>
+                    )}
+                  </div>
+                  {dateSchedules.length === 0 ? (
+                    <div className="bg-white rounded-xl border border-dashed border-slate-200 py-10 text-center">
+                      <p className="text-slate-400 text-xs">이 날의 일정이 없습니다</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {dateSchedules.map(s => {
+                        const linkedIdea = s.linkedIdeaId ? ideaGroups.find(g => g.id === s.linkedIdeaId) : null
+                        const isWork = s.type === '업무 일정'
+                        return (
+                          <div key={s.id} className={`bg-white rounded-lg border border-slate-100 border-l-[3px] px-3.5 py-2.5 hover:shadow-sm transition-all group ${
+                            isWork ? 'border-l-blue-400' : 'border-l-amber-400'
+                          }`}>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${
+                                  isWork ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-600'
+                                }`}>{s.category}</span>
+                                {s.time && <span className="text-xs text-slate-400 font-mono shrink-0">{s.time}</span>}
+                                {linkedIdea && (
+                                  <span className="text-[10px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full font-medium shrink-0">
+                                    💡 {linkedIdea.stockName}
+                                  </span>
+                                )}
+                              </div>
+                              <button onClick={() => deleteSchedule(s.id)}
+                                className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition-all p-0.5 rounded shrink-0">
+                                <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none">
+                                  <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                                </svg>
+                              </button>
+                            </div>
+                            {s.memo && <p className="text-sm text-slate-700 mt-1 leading-snug">{s.memo}</p>}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
           </div>
         )}
       </main>

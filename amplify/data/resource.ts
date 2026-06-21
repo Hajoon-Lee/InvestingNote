@@ -11,7 +11,7 @@ const schema = a.schema({
       memo: a.string(),
       linkedIdeaId: a.string(),
     })
-    .authorization(allow => [allow.publicApiKey()]),
+    .authorization(allow => [allow.owner()]),
 
   InvestmentIdeaGroup: a
     .model({
@@ -22,7 +22,7 @@ const schema = a.schema({
       openDate: a.string().required(),
       closeDate: a.string(),
     })
-    .authorization(allow => [allow.publicApiKey()]),
+    .authorization(allow => [allow.owner()]),
 
   InvestmentMemo: a
     .model({
@@ -32,7 +32,7 @@ const schema = a.schema({
       thesis: a.string().required(),
       risk: a.string().required(),
     })
-    .authorization(allow => [allow.publicApiKey()]),
+    .authorization(allow => [allow.owner()]),
 })
 
 export type Schema = ClientSchema<typeof schema>
@@ -40,9 +40,6 @@ export type Schema = ClientSchema<typeof schema>
 export const data = defineData({
   schema,
   authorizationModes: {
-    defaultAuthorizationMode: 'apiKey',
-    apiKeyAuthorizationMode: {
-      expiresInDays: 365,
-    },
+    defaultAuthorizationMode: 'userPool',
   },
 })

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import Calendar from 'react-calendar'
 import { generateClient } from 'aws-amplify/data'
 import { priceService } from './priceService'
+import { signInWithRedirect, signOut, getCurrentUser, fetchUserAttributes } from 'aws-amplify/auth'
+import { Hub } from 'aws-amplify/utils'
 
 // ── 날짜 유틸 ──────────────────────────────────────────────
 const toKey = (date) => {
@@ -154,8 +156,56 @@ function MiniChart({ prices, positive }) {
   )
 }
 
+// ── 로그인 화면 ──────────────────────────────────────────
+function LoginScreen() {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-8 max-w-sm w-full text-center">
+        <div className="text-3xl mb-4">📊</div>
+        <h1 className="text-xl font-bold text-slate-800 mb-2">투자노트</h1>
+        <p className="text-slate-500 text-sm mb-6 leading-relaxed">
+          펀드매니저를 위한<br />투자 일정 관리 도구
+        </p>
+        <button
+          onClick={() => signInWithRedirect({ provider: 'Google' })}
+          className="w-full flex items-center justify-center gap-3 bg-white border border-slate-200 hover:bg-slate-50 active:scale-[0.98] text-slate-700 text-sm font-medium px-4 py-3 rounded-xl transition-all shadow-sm"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 24 24">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+          </svg>
+          Google로 로그인
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── 메인 앱 ───────────────────────────────────────────────
 export default function App() {
+  const [user, setUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+
+  useEffect(() => {
+    async function checkAuth() {
+      try {
+        const cu = await getCurrentUser()
+        const attrs = await fetchUserAttributes()
+        setUser({ userId: cu.userId, email: attrs.email, name: attrs.name })
+      } catch {
+        setUser(null)
+      }
+      setAuthLoading(false)
+    }
+    checkAuth()
+    const unsubscribe = Hub.listen('auth', ({ payload }) => {
+      if (payload.event === 'signedIn' || payload.event === 'signedOut') checkAuth()
+    })
+    return () => unsubscribe()
+  }, [])
+
   const [schedules, setSchedules] = useState([])
   const [loading, setLoading] = useState(true)
   const [backendError, setBackendError] = useState(false)
@@ -184,8 +234,11 @@ export default function App() {
   // generateClient()는 반드시 Amplify.configure() 이후에 호출해야 하므로
   // 모듈 최상단이 아닌 useEffect(컴포넌트 마운트 이후)에서 초기화한다.
   const clientRef = useRef(null)
+  const userId = user?.userId
 
   useEffect(() => {
+    if (!userId) return
+
     try {
       clientRef.current = generateClient()
     } catch (err) {
@@ -227,7 +280,7 @@ export default function App() {
       groupSub.unsubscribe()
       memoSub.unsubscribe()
     }
-  }, [])
+  }, [userId])
 
   const selectedKey = toKey(selectedDate)
   const dateSchedules = schedules.filter(s => {
@@ -349,6 +402,14 @@ export default function App() {
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
 
   // 백엔드 미설정 상태
+  if (authLoading) return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center">
+      <div className="inline-block w-6 h-6 border-2 border-blue-200 border-t-blue-500 rounded-full animate-spin" />
+    </div>
+  )
+
+  if (!user) return <LoginScreen />
+
   if (backendError) return <BackendSetupScreen />
 
   return (
@@ -374,6 +435,13 @@ export default function App() {
                 </button>
               ))}
             </nav>
+            <div className="ml-auto flex items-center gap-3">
+              <span className="text-xs text-slate-400 hidden sm:block truncate max-w-40">{user?.email}</span>
+              <button
+                onClick={() => signOut()}
+                className="text-xs text-slate-400 hover:text-slate-600 transition-colors shrink-0"
+              >로그아웃</button>
+            </div>
           </div>
         </div>
       </header>

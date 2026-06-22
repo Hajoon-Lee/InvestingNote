@@ -13,6 +13,9 @@ const schema = a.schema({
       time: a.string(),
       memo: a.string(),
       linkedIdeaId: a.string(),
+      isRecurring: a.boolean(),
+      recurrenceRule: a.string(),
+      parentScheduleId: a.string(),
     })
     .authorization(allow => [allow.owner()]),
 
@@ -60,7 +63,11 @@ const schema = a.schema({
 
   generateLakeMemo: a
     .mutation()
-    .arguments({ text: a.string().required() })
+    .arguments({
+      text: a.string().required(),
+      imageBase64: a.string(),
+      imageMimeType: a.string(),
+    })
     .returns(a.ref('GeneratedMemo'))
     .handler(a.handler.function(generateLakeMemo))
     .authorization(allow => [allow.authenticated()]),

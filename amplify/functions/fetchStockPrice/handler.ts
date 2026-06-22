@@ -16,8 +16,9 @@ async function fetchChart(yahooTicker: string, period1: number, period2: number)
 }
 
 export const handler = async (event: any) => {
-  const { ticker, market, openDate, closeDate } = event.arguments
-  if (!ticker || !openDate) throw new Error('ticker와 openDate는 필수입니다')
+  const { ticker: rawTicker, market, openDate, closeDate } = event.arguments
+  if (!rawTicker || !openDate) throw new Error('ticker와 openDate는 필수입니다')
+  const ticker = rawTicker.replace(/\.(KS|KQ)$/, '')
 
   const period1 = toUnix(openDate) - 7 * 86400
   const period2 = closeDate ? toUnix(closeDate) + 86400 : Math.floor(Date.now() / 1000) + 86400

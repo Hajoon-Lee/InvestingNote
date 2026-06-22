@@ -1,5 +1,7 @@
 import { a, defineData, type ClientSchema } from '@aws-amplify/backend'
 import { generateLakeMemo } from '../functions/generateLakeMemo/resource'
+import { fetchStockPrice } from '../functions/fetchStockPrice/resource'
+import { fetchStockMaster } from '../functions/fetchStockMaster/resource'
 
 const schema = a.schema({
   Schedule: a
@@ -18,6 +20,7 @@ const schema = a.schema({
     .model({
       stockName: a.string().required(),
       ticker: a.string().required(),
+      market: a.string(),
       position: a.string().required(),
       status: a.string().required(),
       openDate: a.string().required(),
@@ -49,11 +52,36 @@ const schema = a.schema({
     keyPoints: a.string(),
   }),
 
+  StockPriceResult: a.customType({
+    openPrice: a.float(),
+    currentPrice: a.float(),
+    priceHistory: a.string(),
+  }),
+
   generateLakeMemo: a
     .mutation()
     .arguments({ text: a.string().required() })
     .returns(a.ref('GeneratedMemo'))
     .handler(a.handler.function(generateLakeMemo))
+    .authorization(allow => [allow.authenticated()]),
+
+  fetchStockPrice: a
+    .query()
+    .arguments({
+      ticker: a.string().required(),
+      market: a.string(),
+      openDate: a.string().required(),
+      closeDate: a.string(),
+    })
+    .returns(a.ref('StockPriceResult'))
+    .handler(a.handler.function(fetchStockPrice))
+    .authorization(allow => [allow.authenticated()]),
+
+  searchStocks: a
+    .query()
+    .arguments({ query: a.string().required() })
+    .returns(a.string())
+    .handler(a.handler.function(fetchStockMaster))
     .authorization(allow => [allow.authenticated()]),
 })
 

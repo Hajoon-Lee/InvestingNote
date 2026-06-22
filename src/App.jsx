@@ -22,16 +22,31 @@ const todayKey = toKey(today)
 const TABS = ['Todo', 'Idea', 'Lake']
 const WORK_CATEGORIES = ['기업탐방', 'NDR/IR', '세미나', '보고서/제안서', '컴플라이언스', 'Presentation', '기타']
 const EVENT_CATEGORIES = ['실적발표', '매크로', '카탈리스트', '뉴스', '아이디어 점검', '수급/리밸런싱', '정책/규제', '기타']
-const MOCK_STOCKS = [
-  { name: '삼성전자', ticker: '005930.KS' },
-  { name: 'SK하이닉스', ticker: '000660.KS' },
-  { name: 'NAVER', ticker: '035420.KS' },
-  { name: '카카오', ticker: '035720.KS' },
-  { name: 'NVIDIA', ticker: 'NVDA' },
-  { name: 'Tesla', ticker: 'TSLA' },
-  { name: 'Microsoft', ticker: 'MSFT' },
-  { name: 'Apple', ticker: 'AAPL' },
-]
+// ── 초성 검색 유틸 ────────────────────────────────────────
+const CHOSUNG = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ'
+const getChosung = (str) =>
+  [...str].map(ch => {
+    const code = ch.charCodeAt(0)
+    if (code >= 0xAC00 && code <= 0xD7A3) return CHOSUNG[Math.floor((code - 0xAC00) / (21 * 28))]
+    return ch
+  }).join('')
+
+const isChosung = (str) => [...str].every(ch => CHOSUNG.includes(ch))
+
+const matchStock = (stock, query) => {
+  if (!query) return false
+  const q = query.toLowerCase()
+  const name = stock.name.toLowerCase()
+  const ticker = stock.ticker.toLowerCase()
+  if (name.includes(q) || ticker.includes(q)) return true
+  if (isChosung(query) && getChosung(stock.name).includes(query)) return true
+  let qi = 0
+  for (const ch of name) {
+    if (qi < q.length && ch === q[qi]) qi++
+    if (qi === q.length) return true
+  }
+  return false
+}
 
 const calcHoldingDays = (openDate, closeDate) =>
   Math.max(0, Math.floor(((closeDate ? new Date(closeDate) : new Date()) - new Date(openDate)) / 86400000))
@@ -57,14 +72,13 @@ function useIdeaPrices(ideaGroups) {
       await Promise.all(
         ideaGroups.map(async (idea) => {
           try {
-            const [openPrice, endPrice, history] = await Promise.all([
-              priceService.getClosePriceOnOrBeforeDate(idea.ticker, idea.openDate),
-              idea.closeDate
-                ? priceService.getClosePriceOnOrBeforeDate(idea.ticker, idea.closeDate)
-                : priceService.getLatestClosePrice(idea.ticker),
-              priceService.getPriceHistory(idea.ticker, idea.openDate, idea.closeDate),
-            ])
-            results[idea.id] = { openPrice, endPrice, history, error: false }
+            const data = await priceService.getIdeaPriceData(idea.ticker, idea.market, idea.openDate, idea.closeDate)
+            results[idea.id] = {
+              openPrice: data.openPrice,
+              endPrice: data.currentPrice,
+              history: data.priceHistory,
+              error: false,
+            }
           } catch {
             results[idea.id] = { openPrice: null, endPrice: null, history: [], error: true }
           }
@@ -216,12 +230,16 @@ export default function App() {
     type: '업무 일정', category: '기업탐방', date: todayKey, endDate: '', time: '', memo: '', linkedIdeaId: '',
   })
 
+  const [stockSearchResults, setStockSearchResults] = useState([])
+  const [stockSearching, setStockSearching] = useState(false)
+  const searchTimerRef = useRef(null)
+
   const [ideaGroups, setIdeaGroups] = useState([])
   const [ideaMemos, setIdeaMemos] = useState([])
   const [ideasLoading, setIdeasLoading] = useState(true)
   const [ideaStatusFilter, setIdeaStatusFilter] = useState('전체')
   const [showIdeaForm, setShowIdeaForm] = useState(false)
-  const [ideaForm, setIdeaForm] = useState({ stockName: '', ticker: '', position: 'LONG', thesis: '', risk: '' })
+  const [ideaForm, setIdeaForm] = useState({ stockName: '', ticker: '', market: '', position: 'LONG', thesis: '', risk: '' })
   const [showStockDropdown, setShowStockDropdown] = useState(false)
   const [selectedIdeaId, setSelectedIdeaId] = useState(null)
   const [showUpdateForm, setShowUpdateForm] = useState(false)
@@ -368,6 +386,7 @@ export default function App() {
     const { data: group } = await clientRef.current.models.InvestmentIdeaGroup.create({
       stockName: ideaForm.stockName.trim(),
       ticker: ideaForm.ticker,
+      market: ideaForm.market || null,
       position: ideaForm.position,
       status: 'OPEN',
       openDate: todayKey,
@@ -380,7 +399,7 @@ export default function App() {
       risk: ideaForm.risk.trim(),
     })
     setShowIdeaForm(false)
-    setIdeaForm({ stockName: '', ticker: '', position: 'LONG', thesis: '', risk: '' })
+    setIdeaForm({ stockName: '', ticker: '', market: '', position: 'LONG', thesis: '', risk: '' })
   }
 
   const addIdeaUpdate = async () => {
@@ -960,7 +979,7 @@ export default function App() {
                     </p>
                   </div>
                   <button
-                    onClick={() => { setShowIdeaForm(true); setIdeaForm({ stockName: '', ticker: '', position: 'LONG', thesis: '', risk: '' }) }}
+                    onClick={() => { setShowIdeaForm(true); setIdeaForm({ stockName: '', ticker: '', market: '', position: 'LONG', thesis: '', risk: '' }) }}
                     disabled={ideasLoading}
                     className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.97] disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all shadow-sm shadow-emerald-500/20"
                   >+ 아이디어 오픈</button>
@@ -975,12 +994,36 @@ export default function App() {
                     <div className="p-6 space-y-5">
                       <div className="relative">
                         <input
+                          autoComplete="nope"
+                          autoCorrect="off"
+                          spellCheck="false"
+                          name="stock-search-xq7"
                           className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 placeholder-slate-300 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition"
-                          placeholder="종목명 검색 (예: 삼성전자, NVIDIA)"
+                          placeholder="종목명 검색 (예: 삼성전자, 현대차)"
                           value={ideaForm.stockName}
-                          onChange={e => { setIdeaForm(f => ({ ...f, stockName: e.target.value, ticker: '' })); setShowStockDropdown(true) }}
+                          onChange={e => {
+                            const val = e.target.value
+                            setIdeaForm(f => ({ ...f, stockName: val, ticker: '' }))
+                            setShowStockDropdown(true)
+                            clearTimeout(searchTimerRef.current)
+                            if (val.trim().length >= 1 && clientRef.current) {
+                              setStockSearching(true)
+                              searchTimerRef.current = setTimeout(() => {
+                                clientRef.current.queries.searchStocks({ query: val.trim() }).then(({ data, errors }) => {
+                                  if (errors?.length) { console.error('[Search]', errors[0].message); setStockSearchResults([]); }
+                                  else {
+                                    try { setStockSearchResults(JSON.parse(data || '[]')) } catch { setStockSearchResults([]) }
+                                  }
+                                  setStockSearching(false)
+                                }).catch(() => { setStockSearchResults([]); setStockSearching(false) })
+                              }, 300)
+                            } else {
+                              setStockSearchResults([])
+                              setStockSearching(false)
+                            }
+                          }}
                           onFocus={() => ideaForm.stockName && !ideaForm.ticker && setShowStockDropdown(true)}
-                          onBlur={() => setShowStockDropdown(false)}
+                          onBlur={() => setTimeout(() => setShowStockDropdown(false), 200)}
                         />
                         {ideaForm.ticker && (
                           <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">
@@ -988,22 +1031,26 @@ export default function App() {
                           </span>
                         )}
                         {showStockDropdown && ideaForm.stockName && !ideaForm.ticker && (() => {
-                          const matches = MOCK_STOCKS.filter(s =>
-                            s.name.toLowerCase().includes(ideaForm.stockName.toLowerCase()) ||
-                            s.ticker.toLowerCase().includes(ideaForm.stockName.toLowerCase())
+                          if (stockSearching) return (
+                            <div className="absolute top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-lg z-20 mt-1 px-4 py-3 text-sm text-slate-400">
+                              검색 중...
+                            </div>
                           )
-                          if (!matches.length) return null
+                          if (!stockSearchResults.length) return null
                           return (
-                            <div className="absolute top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-lg z-20 mt-1 overflow-hidden">
-                              {matches.map(s => (
+                            <div className="absolute top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-lg z-20 mt-1 overflow-hidden max-h-64 overflow-y-auto">
+                              {stockSearchResults.map(s => (
                                 <button
                                   key={s.ticker}
                                   onMouseDown={e => e.preventDefault()}
-                                  onClick={() => { setIdeaForm(f => ({ ...f, stockName: s.name, ticker: s.ticker })); setShowStockDropdown(false) }}
+                                  onClick={() => { setIdeaForm(f => ({ ...f, stockName: s.name, ticker: s.ticker, market: s.market || '' })); setShowStockDropdown(false); setStockSearchResults([]) }}
                                   className="w-full text-left px-4 py-2.5 hover:bg-slate-50 text-sm flex justify-between"
                                 >
                                   <span className="font-medium text-slate-700">{s.name}</span>
-                                  <span className="text-slate-400">{s.ticker}</span>
+                                  <span className="text-slate-400 flex items-center gap-1.5">
+                                    {s.market && <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded">{s.market}</span>}
+                                    {s.ticker}
+                                  </span>
                                 </button>
                               ))}
                             </div>
@@ -1077,7 +1124,7 @@ export default function App() {
                       종목의 투자논리와 리스크를<br />체계적으로 기록해보세요.
                     </p>
                     {ideaGroups.length === 0 && (
-                      <button onClick={() => { setShowIdeaForm(true); setIdeaForm({ stockName: '', ticker: '', position: 'LONG', thesis: '', risk: '' }) }}
+                      <button onClick={() => { setShowIdeaForm(true); setIdeaForm({ stockName: '', ticker: '', market: '', position: 'LONG', thesis: '', risk: '' }) }}
                         className="bg-emerald-500 hover:bg-emerald-600 active:scale-[0.97] text-white text-xs font-medium px-4 py-2 rounded-xl transition-all shadow-sm shadow-emerald-500/20"
                       >+ 아이디어 오픈</button>
                     )}

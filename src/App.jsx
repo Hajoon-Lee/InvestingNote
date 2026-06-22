@@ -106,8 +106,8 @@ function TileContent({ date, schedules }) {
   const hasEvent = items.some(s => s.type === '투자 이벤트')
   return (
     <div style={{ display: 'flex', gap: 2, justifyContent: 'center', marginTop: 2 }}>
-      {hasWork && <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#3b82f6', display: 'block' }} />}
-      {hasEvent && <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#f59e0b', display: 'block' }} />}
+      {hasWork && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3b82f6', display: 'block' }} />}
+      {hasEvent && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#f59e0b', display: 'block' }} />}
     </div>
   )
 }
@@ -226,8 +226,10 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState(today)
   const [activeTab, setActiveTab] = useState('Todo')
   const [showScheduleForm, setShowScheduleForm] = useState(false)
+  const [editingScheduleId, setEditingScheduleId] = useState(null)
   const [scheduleForm, setScheduleForm] = useState({
     type: '업무 일정', category: '기업탐방', date: todayKey, endDate: '', time: '', memo: '', linkedIdeaId: '',
+    isRecurring: false, recurrenceType: 'weekly', recurrenceDayOfWeek: 1, recurrenceWeekOfMonth: 1, recurrenceCount: 8,
   })
 
   const [stockSearchResults, setStockSearchResults] = useState([])
@@ -258,6 +260,9 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false)
   const [lakeVisibleCount, setLakeVisibleCount] = useState(10)
   const [lakeExpandedIds, setLakeExpandedIds] = useState(new Set())
+  const [lakeImageBase64, setLakeImageBase64] = useState('')
+  const [lakeImageMimeType, setLakeImageMimeType] = useState('')
+  const [lakeImagePreview, setLakeImagePreview] = useState('')
   const lakeFileInputRef = useRef(null)
 
   const ideaPrices = useIdeaPrices(ideaGroups)
@@ -325,8 +330,10 @@ export default function App() {
     }
   }, [userId])
 
+  const visibleSchedules = schedules.filter(s => !s.isRecurring)
+
   const selectedKey = toKey(selectedDate)
-  const dateSchedules = schedules.filter(s => {
+  const dateSchedules = visibleSchedules.filter(s => {
     if (s.endDate) return selectedKey >= s.date && selectedKey <= s.endDate
     return s.date === selectedKey
   }).sort((a, b) => {
@@ -336,9 +343,37 @@ export default function App() {
     return (a.createdAt || '').localeCompare(b.createdAt || '')
   })
 
-  const addSchedule = async () => {
+  const defaultScheduleForm = { type: '업무 일정', category: '기업탐방', date: todayKey, endDate: '', time: '', memo: '', linkedIdeaId: '', isRecurring: false, recurrenceType: 'weekly', recurrenceDayOfWeek: today.getDay(), recurrenceWeekOfMonth: 1, recurrenceCount: 8 }
+
+  const startEditSchedule = (schedule) => {
+    setEditingScheduleId(schedule.id)
+    setScheduleForm({
+      type: schedule.type,
+      category: schedule.category,
+      date: schedule.date,
+      endDate: schedule.endDate || '',
+      time: schedule.time || '',
+      memo: schedule.memo || '',
+      linkedIdeaId: schedule.linkedIdeaId || '',
+      isRecurring: false, recurrenceType: 'weekly', recurrenceDayOfWeek: 1, recurrenceWeekOfMonth: 1, recurrenceCount: 8,
+    })
+    setShowScheduleForm(true)
+  }
+
+  const getNthWeekdayOfMonth = (year, month, dayOfWeek, weekOfMonth) => {
+    const d = new Date(year, month, 1)
+    const firstDay = d.getDay()
+    let offset = dayOfWeek - firstDay
+    if (offset < 0) offset += 7
+    const day = 1 + offset + (weekOfMonth - 1) * 7
+    const result = new Date(d.getFullYear(), d.getMonth(), day)
+    if (result.getMonth() !== d.getMonth()) return null
+    return result
+  }
+
+  const saveSchedule = async () => {
     if (!scheduleForm.date || !clientRef.current) return
-    await clientRef.current.models.Schedule.create({
+    const fields = {
       type: scheduleForm.type,
       category: scheduleForm.category,
       date: scheduleForm.date,
@@ -346,13 +381,48 @@ export default function App() {
       time: scheduleForm.time || null,
       memo: scheduleForm.memo.trim() || null,
       linkedIdeaId: scheduleForm.linkedIdeaId || null,
-    })
+    }
+    if (editingScheduleId) {
+      await clientRef.current.models.Schedule.update({ id: editingScheduleId, ...fields })
+    } else if (scheduleForm.isRecurring) {
+      const rule = {
+        type: scheduleForm.recurrenceType,
+        dayOfWeek: Number(scheduleForm.recurrenceDayOfWeek),
+        ...(scheduleForm.recurrenceType === 'monthly_nth' && { weekOfMonth: Number(scheduleForm.recurrenceWeekOfMonth) }),
+      }
+      const { data: template } = await clientRef.current.models.Schedule.create({
+        ...fields,
+        isRecurring: true,
+        recurrenceRule: JSON.stringify(rule),
+      })
+      const start = new Date(fields.date + 'T00:00:00')
+      const instances = []
+      for (let i = 1; i <= scheduleForm.recurrenceCount; i++) {
+        let d
+        if (rule.type === 'weekly') {
+          d = new Date(start)
+          d.setDate(d.getDate() + i * 7)
+        } else {
+          d = getNthWeekdayOfMonth(start.getFullYear(), start.getMonth() + i, rule.dayOfWeek, rule.weekOfMonth)
+        }
+        if (d) instances.push({ ...fields, date: toKey(d), parentScheduleId: template.id })
+      }
+      await Promise.all(instances.map(inst => clientRef.current.models.Schedule.create(inst)))
+    } else {
+      await clientRef.current.models.Schedule.create(fields)
+    }
     setShowScheduleForm(false)
-    setScheduleForm({ type: '업무 일정', category: '기업탐방', date: todayKey, endDate: '', time: '', memo: '', linkedIdeaId: '' })
+    setEditingScheduleId(null)
+    setScheduleForm(defaultScheduleForm)
   }
 
   const deleteSchedule = async (id) => {
     if (!clientRef.current) return
+    const s = schedules.find(x => x.id === id)
+    if (s?.isRecurring) {
+      const children = schedules.filter(x => x.parentScheduleId === id)
+      await Promise.all(children.map(c => clientRef.current.models.Schedule.delete({ id: c.id })))
+    }
     await clientRef.current.models.Schedule.delete({ id })
   }
 
@@ -360,7 +430,7 @@ export default function App() {
     const limit = new Date(today)
     limit.setDate(limit.getDate() + 30)
     const limitKey = toKey(limit)
-    return schedules
+    return visibleSchedules
       .filter(s => (s.endDate || s.date) >= todayKey && s.date <= limitKey)
       .sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''))
   })()
@@ -468,13 +538,53 @@ export default function App() {
     return text
   }
 
+  const clearFileState = () => {
+    setLakePdfName('')
+    setLakePdfText('')
+    setLakePdfExtracting(false)
+    setLakeImageBase64('')
+    setLakeImageMimeType('')
+    setLakeImagePreview('')
+    if (lakeFileInputRef.current) lakeFileInputRef.current.value = ''
+  }
+
+  const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif']
+  const MAX_FILE_SIZE = 7 * 1024 * 1024
+
+  const handleImageFile = (file) => {
+    if (!IMAGE_TYPES.includes(file.type)) {
+      setLakeError('PNG, JPEG, WebP, HEIC 이미지만 지원됩니다.')
+      return
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      setLakeError('파일이 너무 큽니다 (최대 7MB)')
+      return
+    }
+    setLakeError('')
+    setLakePdfName('')
+    setLakePdfText('')
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result
+      const isHeic = file.type === 'image/heic' || file.type === 'image/heif'
+      setLakeImagePreview(isHeic ? '' : dataUrl)
+      setLakeImageBase64(dataUrl.split(',')[1])
+      setLakeImageMimeType(file.type)
+      setLakePdfName(file.name)
+    }
+    reader.readAsDataURL(file)
+  }
+
   const handlePdfFile = async (file) => {
-    if (!file || file.type !== 'application/pdf') {
-      setLakeError('PDF 파일만 지원됩니다.')
+    if (file.size > MAX_FILE_SIZE) {
+      setLakeError('파일이 너무 큽니다 (최대 7MB)')
       return
     }
     setLakePdfName(file.name)
     setLakePdfText('')
+    setLakeImageBase64('')
+    setLakeImageMimeType('')
+    setLakeImagePreview('')
     setLakeError('')
     setLakePdfExtracting(true)
     try {
@@ -494,13 +604,30 @@ export default function App() {
     setLakePdfExtracting(false)
   }
 
+  const handleFileUpload = (file) => {
+    if (!file) return
+    if (file.type === 'application/pdf') {
+      handlePdfFile(file)
+    } else if (IMAGE_TYPES.includes(file.type)) {
+      handleImageFile(file)
+    } else {
+      setLakeError('PDF 또는 이미지 파일(PNG, JPEG, WebP, HEIC)만 지원됩니다.')
+    }
+  }
+
   const handleGenerateLakeMemo = async () => {
     const inputText = lakePdfText.trim() || lakeInputText.trim()
-    if (!inputText || !clientRef.current) return
+    const hasImage = !!lakeImageBase64
+    if (!inputText && !hasImage) return
+    if (!clientRef.current) return
     setLakeGenerating(true)
     setLakeError('')
     try {
-      const { data: result, errors } = await clientRef.current.mutations.generateLakeMemo({ text: inputText })
+      const args = {
+        text: inputText || '(이미지 참조)',
+        ...(hasImage && { imageBase64: lakeImageBase64, imageMimeType: lakeImageMimeType }),
+      }
+      const { data: result, errors } = await clientRef.current.mutations.generateLakeMemo(args)
       if (errors?.length) throw new Error(errors[0].message)
       await clientRef.current.models.LakeMemo.create({
         title: result.title,
@@ -508,9 +635,7 @@ export default function App() {
         keyPoints: result.keyPoints,
       })
       setLakeInputText('')
-      setLakePdfText('')
-      setLakePdfName('')
-      if (lakeFileInputRef.current) lakeFileInputRef.current.value = ''
+      clearFileState()
     } catch (err) {
       console.error('Generate memo error:', err)
       setLakeError('메모 생성에 실패했습니다. 다시 시도해주세요.')
@@ -541,13 +666,13 @@ export default function App() {
       <header className="bg-white border-b border-slate-100 shadow-sm sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-4">
           <div className="flex items-center gap-6 h-14">
-            <span className="text-base font-bold text-slate-800 shrink-0">투자노트</span>
+            <span className="text-lg font-bold text-slate-800 shrink-0">투자노트</span>
             <nav className="flex gap-1">
               {TABS.map(tab => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
-                  className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  className={`px-4 py-1.5 rounded-lg text-base font-medium transition-all ${
                     activeTab === tab
                       ? 'bg-blue-500 text-white shadow-sm'
                       : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
@@ -576,8 +701,8 @@ export default function App() {
             {/* 입력 영역 */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
               <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
-                <h2 className="text-base font-bold text-slate-800">🌊 Add to Lake</h2>
-                <p className="text-xs text-slate-400 mt-1">뉴스, 리포트, 리서치 자료 등을 넣으면 AI가 한국어 투자 메모로 정리합니다</p>
+                <h2 className="text-lg font-bold text-slate-800">🌊 Add to Lake</h2>
+                <p className="text-sm text-slate-400 mt-1">뉴스, 리포트, 리서치 자료 등을 넣으면 AI가 한국어 투자 메모로 정리합니다</p>
               </div>
               <div className="p-6 space-y-4">
                 {!lakePdfName && (
@@ -597,7 +722,7 @@ export default function App() {
                     e.preventDefault()
                     setIsDragging(false)
                     const file = e.dataTransfer.files[0]
-                    if (file) handlePdfFile(file)
+                    if (file) handleFileUpload(file)
                   }}
                   onClick={() => !lakePdfName && lakeFileInputRef.current?.click()}
                   className={`border-2 border-dashed rounded-xl px-4 text-center transition-all ${
@@ -609,16 +734,16 @@ export default function App() {
                   }`}
                 >
                   {lakePdfName ? (
-                    <div className="flex flex-col items-center gap-1.5">
+                    <div className="flex flex-col items-center gap-2">
+                      {lakeImagePreview ? (
+                        <img src={lakeImagePreview} alt="preview" className="max-h-32 rounded-lg" />
+                      ) : null}
                       <div className="flex items-center gap-2">
-                        <span className="text-sm text-emerald-700 font-semibold">📄 {lakePdfName}</span>
+                        <span className="text-sm text-emerald-700 font-semibold">
+                          {lakeImageBase64 ? '🖼️' : '📄'} {lakePdfName}
+                        </span>
                         <button
-                          onClick={e => {
-                            e.stopPropagation()
-                            setLakePdfName('')
-                            setLakePdfText('')
-                            if (lakeFileInputRef.current) lakeFileInputRef.current.value = ''
-                          }}
+                          onClick={e => { e.stopPropagation(); clearFileState() }}
                           className="text-slate-400 hover:text-red-400 transition-colors p-0.5"
                         >
                           <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
@@ -633,24 +758,26 @@ export default function App() {
                         </div>
                       ) : lakePdfText ? (
                         <span className="text-xs text-emerald-500 font-medium">✓ PDF 첨부 완료</span>
+                      ) : lakeImageBase64 ? (
+                        <span className="text-xs text-emerald-500 font-medium">✓ 이미지 첨부 완료</span>
                       ) : null}
                     </div>
                   ) : (
                     <div>
                       <p className="text-sm text-slate-500 mb-1">
-                        {isDragging ? 'PDF 파일을 놓으세요' : 'PDF 파일을 드래그하거나 클릭하여 선택'}
+                        {isDragging ? '파일을 놓으세요' : '파일을 드래그하거나 클릭하여 선택'}
                       </p>
-                      <p className="text-xs text-slate-400">텍스트 기반 PDF만 지원됩니다</p>
+                      <p className="text-xs text-slate-400">PDF, PNG, JPEG, WebP, HEIC 지원 (최대 7MB)</p>
                     </div>
                   )}
                   <input
                     ref={lakeFileInputRef}
                     type="file"
-                    accept=".pdf"
+                    accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.heif"
                     className="hidden"
                     onChange={e => {
                       const file = e.target.files?.[0]
-                      if (file) handlePdfFile(file)
+                      if (file) handleFileUpload(file)
                     }}
                   />
                 </div>
@@ -662,7 +789,7 @@ export default function App() {
                 <div className="flex justify-end pt-2">
                   <button
                     onClick={handleGenerateLakeMemo}
-                    disabled={(!lakeInputText.trim() && !lakePdfText.trim()) || lakeGenerating || lakePdfExtracting}
+                    disabled={(!lakeInputText.trim() && !lakePdfText.trim() && !lakeImageBase64) || lakeGenerating || lakePdfExtracting}
                     className="bg-blue-500 hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-6 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/20 flex items-center gap-2"
                   >
                     {lakeGenerating && (
@@ -678,8 +805,8 @@ export default function App() {
             <div>
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-800 tracking-tight">Lake Feed</h2>
-                  <p className="text-xs text-slate-400 mt-1">
+                  <h2 className="text-xl font-bold text-slate-800 tracking-tight">Lake Feed</h2>
+                  <p className="text-sm text-slate-400 mt-1">
                     {lakeLoading ? '동기화 중...' : `총 ${lakeMemos.length}개 메모`}
                   </p>
                 </div>
@@ -690,8 +817,8 @@ export default function App() {
               ) : sortedLakeMemos.length === 0 ? (
                 <div className="bg-white rounded-2xl border border-dashed border-slate-200 py-16 text-center">
                   <div className="text-3xl mb-3 opacity-80">🌊</div>
-                  <p className="text-slate-600 font-semibold text-sm mb-1">아직 생성된 메모가 없습니다</p>
-                  <p className="text-slate-400 text-xs leading-relaxed max-w-56 mx-auto">
+                  <p className="text-slate-700 font-semibold text-base mb-1">아직 생성된 메모가 없습니다</p>
+                  <p className="text-slate-500 text-sm leading-relaxed max-w-56 mx-auto">
                     리서치 자료를 입력하면<br />AI가 투자 메모를 작성합니다.
                   </p>
                 </div>
@@ -973,7 +1100,7 @@ export default function App() {
                 {/* 목록 헤더 */}
                 <div className="flex items-center justify-between mb-1">
                   <div>
-                    <h2 className="text-lg font-bold text-slate-800 tracking-tight">투자메모</h2>
+                    <h2 className="text-xl font-bold text-slate-800 tracking-tight">투자메모</h2>
                     <p className="text-xs text-slate-400 mt-1">
                       {ideasLoading ? '동기화 중...' : `총 ${ideaGroups.length}개 아이디어`}
                     </p>
@@ -1117,10 +1244,10 @@ export default function App() {
                 ) : filteredIdeas.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-dashed border-slate-200 py-16 text-center">
                     <div className="text-3xl mb-3 opacity-80">💡</div>
-                    <p className="text-slate-600 font-semibold text-sm mb-1">
+                    <p className="text-slate-700 font-semibold text-base mb-1">
                       {ideaGroups.length === 0 ? '아직 등록된 아이디어가 없습니다' : '해당하는 아이디어가 없습니다'}
                     </p>
-                    <p className="text-slate-400 text-xs leading-relaxed max-w-56 mx-auto mb-5">
+                    <p className="text-slate-500 text-sm leading-relaxed max-w-56 mx-auto mb-5">
                       종목의 투자논리와 리스크를<br />체계적으로 기록해보세요.
                     </p>
                     {ideaGroups.length === 0 && (
@@ -1192,15 +1319,15 @@ export default function App() {
             <section>
               <div className="flex items-center justify-between mb-5">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-800 tracking-tight flex items-center gap-2">
-                    <span className="text-base">🔥</span> 다가오는 이벤트
+                  <h2 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
+                    <span className="text-lg">🔥</span> 다가오는 이벤트
                   </h2>
-                  <p className="text-xs text-slate-400 mt-1">
+                  <p className="text-sm text-slate-400 mt-1">
                     {loading ? '동기화 중...' : `Next 30 Days · ${upcomingSchedules.length}건`}
                   </p>
                 </div>
                 <button
-                  onClick={() => setShowScheduleForm(v => !v)}
+                  onClick={() => { setEditingScheduleId(null); setScheduleForm(defaultScheduleForm); setShowScheduleForm(v => !v) }}
                   disabled={loading}
                   className="bg-blue-500 hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all shadow-sm shadow-blue-500/20"
                 >+ 일정 추가</button>
@@ -1210,7 +1337,7 @@ export default function App() {
               {showScheduleForm && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 mb-5 overflow-hidden">
                   <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
-                    <h3 className="text-sm font-bold text-slate-800">새 일정</h3>
+                    <h3 className="text-sm font-bold text-slate-800">{editingScheduleId ? '일정 수정' : '새 일정'}</h3>
                   </div>
                   <div className="p-6 space-y-5">
                     <div className="bg-slate-100 rounded-xl p-1 flex">
@@ -1252,7 +1379,11 @@ export default function App() {
                       <div className="flex gap-2">
                         <div className="flex-1">
                           <input type="date" value={scheduleForm.date}
-                            onChange={e => setScheduleForm(f => ({ ...f, date: e.target.value }))}
+                            onChange={e => {
+                              const v = e.target.value
+                              const dow = v ? new Date(v + 'T00:00:00').getDay() : scheduleForm.recurrenceDayOfWeek
+                              setScheduleForm(f => ({ ...f, date: v, recurrenceDayOfWeek: dow }))
+                            }}
                             className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition"
                           />
                           <p className="text-[10px] text-slate-400 mt-1 pl-1">날짜</p>
@@ -1302,12 +1433,87 @@ export default function App() {
                       />
                     </div>
 
+                    {!editingScheduleId && (
+                      <div>
+                        <label className="flex items-center gap-2 text-sm font-medium text-slate-600 mb-2 cursor-pointer select-none">
+                          <input type="checkbox" checked={scheduleForm.isRecurring}
+                            onChange={e => setScheduleForm(f => ({ ...f, isRecurring: e.target.checked }))}
+                            className="rounded border-slate-300 text-blue-500 focus:ring-blue-400 w-4 h-4"
+                          />
+                          반복 일정
+                        </label>
+                        {scheduleForm.isRecurring && (() => {
+                          const dayNames = ['일', '월', '화', '수', '목', '금', '토']
+                          const previewText = scheduleForm.recurrenceType === 'weekly'
+                            ? `매주 ${dayNames[scheduleForm.recurrenceDayOfWeek]}요일, 총 ${scheduleForm.recurrenceCount}회`
+                            : `매월 ${scheduleForm.recurrenceWeekOfMonth}번째 ${dayNames[scheduleForm.recurrenceDayOfWeek]}요일, 총 ${scheduleForm.recurrenceCount}회`
+                          return (
+                          <div className="space-y-3 pl-6 pt-1">
+                            <div className="bg-slate-100 rounded-xl p-1 flex">
+                              {[['weekly', '매주'], ['monthly_nth', '매월 n번째 요일']].map(([val, label]) => (
+                                <button key={val} type="button"
+                                  onClick={() => setScheduleForm(f => ({ ...f, recurrenceType: val }))}
+                                  className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all ${
+                                    scheduleForm.recurrenceType === val ? 'bg-blue-500 text-white shadow-sm' : 'text-slate-400 hover:text-slate-500'
+                                  }`}
+                                >{label}</button>
+                              ))}
+                            </div>
+                            <div className="flex gap-3">
+                              <div className="flex-1">
+                                <label className="text-xs text-slate-500 mb-1 block">요일</label>
+                                <select value={scheduleForm.recurrenceDayOfWeek}
+                                  onChange={e => setScheduleForm(f => ({ ...f, recurrenceDayOfWeek: Number(e.target.value) }))}
+                                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition bg-white"
+                                >
+                                  {dayNames.map((d, i) => (
+                                    <option key={i} value={i}>{d}요일</option>
+                                  ))}
+                                </select>
+                              </div>
+                              {scheduleForm.recurrenceType === 'monthly_nth' && (
+                                <div className="flex-1">
+                                  <label className="text-xs text-slate-500 mb-1 block">몇 번째</label>
+                                  <select value={scheduleForm.recurrenceWeekOfMonth}
+                                    onChange={e => setScheduleForm(f => ({ ...f, recurrenceWeekOfMonth: Number(e.target.value) }))}
+                                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition bg-white"
+                                  >
+                                    {[1, 2, 3, 4, 5].map(n => (
+                                      <option key={n} value={n}>{n}번째</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+                              <div className="flex-1">
+                                <label className="text-xs text-slate-500 mb-1 block">반복 횟수</label>
+                                <select value={scheduleForm.recurrenceCount}
+                                  onChange={e => setScheduleForm(f => ({ ...f, recurrenceCount: Number(e.target.value) }))}
+                                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition bg-white"
+                                >
+                                  {(scheduleForm.recurrenceType === 'weekly'
+                                    ? [{ v: 4, l: '4회 (1개월)' }, { v: 8, l: '8회 (2개월)' }, { v: 12, l: '12회 (3개월)' }, { v: 24, l: '24회 (6개월)' }]
+                                    : [{ v: 3, l: '3회' }, { v: 6, l: '6회' }, { v: 12, l: '12회' }]
+                                  ).map(o => (
+                                    <option key={o.v} value={o.v}>{o.l}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                            <p className="text-sm text-blue-600 bg-blue-50 px-3 py-2 rounded-lg font-medium">
+                              🔁 {previewText}
+                            </p>
+                          </div>
+                          )
+                        })()}
+                      </div>
+                    )}
+
                     <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-                      <button onClick={() => setShowScheduleForm(false)}
+                      <button onClick={() => { setShowScheduleForm(false); setEditingScheduleId(null) }}
                         className="text-sm text-slate-400 hover:text-slate-600 px-4 py-2.5 rounded-xl transition-colors">취소</button>
-                      <button onClick={addSchedule}
+                      <button onClick={saveSchedule}
                         className="bg-blue-500 hover:bg-blue-600 active:scale-[0.97] text-white text-sm font-medium px-6 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/20"
-                      >추가</button>
+                      >{editingScheduleId ? '수정' : '추가'}</button>
                     </div>
                   </div>
                 </div>
@@ -1319,8 +1525,8 @@ export default function App() {
               ) : upcomingSchedules.length === 0 ? (
                 <div className="bg-white rounded-2xl border border-dashed border-slate-200 py-16 text-center">
                   <div className="text-3xl mb-3 opacity-80">📅</div>
-                  <p className="text-slate-600 font-semibold text-sm mb-1">예정된 일정이 없습니다</p>
-                  <p className="text-slate-400 text-xs leading-relaxed max-w-56 mx-auto mb-5">
+                  <p className="text-slate-700 font-semibold text-base mb-1">예정된 일정이 없습니다</p>
+                  <p className="text-slate-500 text-sm leading-relaxed max-w-56 mx-auto mb-5">
                     기업탐방, 실적발표, 매크로 이벤트,<br />
                     아이디어 점검 등을 기록해보세요.
                   </p>
@@ -1334,7 +1540,7 @@ export default function App() {
                     const linkedIdea = s.linkedIdeaId ? ideaGroups.find(g => g.id === s.linkedIdeaId) : null
                     const isWork = s.type === '업무 일정'
                     return (
-                      <div key={s.id} className={`bg-white rounded-xl border border-slate-100 border-l-[3px] p-4 hover:shadow-md hover:border-slate-200 transition-all group flex flex-col ${
+                      <div key={s.id} onClick={() => startEditSchedule(s)} className={`bg-white rounded-xl border border-slate-100 border-l-[3px] p-4 hover:shadow-md hover:border-slate-200 transition-all group flex flex-col cursor-pointer ${
                         isWork ? 'border-l-blue-400' : 'border-l-amber-400'
                       }`}>
                         <div className="flex items-start justify-between mb-3">
@@ -1344,10 +1550,11 @@ export default function App() {
                             {isWork ? '🏢' : '📈'} {s.type}
                           </span>
                           <div className="flex items-center gap-1.5">
+                            {s.parentScheduleId && <span className="text-[10px] text-slate-400">🔁</span>}
                             <span className={`text-xs font-bold px-2 py-0.5 rounded-md ${dDayColor(s.date)}`}>
                               {calcDDay(s.date)}
                             </span>
-                            <button onClick={() => deleteSchedule(s.id)}
+                            <button onClick={e => { e.stopPropagation(); deleteSchedule(s.id) }}
                               className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition-all p-1 rounded-lg hover:bg-red-50">
                               <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
                                 <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
@@ -1355,8 +1562,8 @@ export default function App() {
                             </button>
                           </div>
                         </div>
-                        <p className="text-xs text-slate-400 mb-1 font-medium">{s.category}</p>
-                        {s.memo && <p className="text-sm text-slate-800 font-medium leading-relaxed mb-3">{s.memo}</p>}
+                        <p className="text-sm text-slate-400 mb-1 font-medium">{s.category}</p>
+                        {s.memo && <p className="text-base text-slate-800 font-medium leading-relaxed mb-3">{s.memo}</p>}
                         <div className="flex items-center justify-between pt-2.5 border-t border-slate-50 mt-auto">
                           <div>
                             {linkedIdea && (
@@ -1380,7 +1587,7 @@ export default function App() {
                 섹션 2: 전체 일정 캘린더 (보조)
                ══════════════════════════════════════════════════ */}
             <section>
-              <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2 mb-4">
+              <h3 className="text-base font-bold text-slate-700 flex items-center gap-2 mb-4">
                 <span>📅</span> 전체 일정 캘린더
               </h3>
               <div className="flex flex-col lg:flex-row gap-5 lg:items-start">
@@ -1393,7 +1600,7 @@ export default function App() {
                     showFixedNumberOfWeeks={false}
                     formatDay={(_locale, date) => date.getDate()}
                     tileContent={({ date, view }) =>
-                      view === 'month' ? <TileContent date={date} schedules={schedules} /> : null
+                      view === 'month' ? <TileContent date={date} schedules={visibleSchedules} /> : null
                     }
                   />
                   <div className="flex gap-5 mt-4 pt-3 border-t border-slate-100 text-xs text-slate-500">
@@ -1411,8 +1618,8 @@ export default function App() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <h4 className="text-sm font-bold text-slate-800">{formatDisplay(selectedDate)}</h4>
-                      <p className="text-xs text-slate-400 mt-0.5">
+                      <h4 className="text-base font-bold text-slate-800">{formatDisplay(selectedDate)}</h4>
+                      <p className="text-sm text-slate-400 mt-0.5">
                         {dateSchedules.length === 0 ? '일정 없음' : `${dateSchedules.length}건`}
                       </p>
                     </div>
@@ -1422,7 +1629,7 @@ export default function App() {
                   </div>
                   {dateSchedules.length === 0 ? (
                     <div className="bg-white rounded-xl border border-dashed border-slate-200 py-10 text-center">
-                      <p className="text-slate-400 text-xs">이 날의 일정이 없습니다</p>
+                      <p className="text-slate-500 text-sm">이 날의 일정이 없습니다</p>
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -1430,29 +1637,30 @@ export default function App() {
                         const linkedIdea = s.linkedIdeaId ? ideaGroups.find(g => g.id === s.linkedIdeaId) : null
                         const isWork = s.type === '업무 일정'
                         return (
-                          <div key={s.id} className={`bg-white rounded-lg border border-slate-100 border-l-[3px] px-3.5 py-2.5 hover:shadow-sm transition-all group ${
+                          <div key={s.id} onClick={() => startEditSchedule(s)} className={`bg-white rounded-lg border border-slate-100 border-l-[3px] px-3.5 py-2.5 hover:shadow-sm transition-all group cursor-pointer ${
                             isWork ? 'border-l-blue-400' : 'border-l-amber-400'
                           }`}>
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2 min-w-0">
-                                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${
+                                <span className={`text-xs font-semibold px-1.5 py-0.5 rounded shrink-0 ${
                                   isWork ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-600'
                                 }`}>{s.category}</span>
-                                {s.time && <span className="text-xs text-slate-400 font-mono shrink-0">{s.time}</span>}
+                                {s.time && <span className="text-sm text-slate-400 font-mono shrink-0">{s.time}</span>}
+                                {s.parentScheduleId && <span className="text-[10px] text-slate-400 shrink-0">🔁</span>}
                                 {linkedIdea && (
                                   <span className="text-[10px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full font-medium shrink-0">
                                     💡 {linkedIdea.stockName}
                                   </span>
                                 )}
                               </div>
-                              <button onClick={() => deleteSchedule(s.id)}
+                              <button onClick={e => { e.stopPropagation(); deleteSchedule(s.id) }}
                                 className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition-all p-0.5 rounded shrink-0">
                                 <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none">
                                   <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
                                 </svg>
                               </button>
                             </div>
-                            {s.memo && <p className="text-sm text-slate-700 mt-1 leading-snug">{s.memo}</p>}
+                            {s.memo && <p className="text-base text-slate-700 mt-1 leading-snug">{s.memo}</p>}
                           </div>
                         )
                       })}

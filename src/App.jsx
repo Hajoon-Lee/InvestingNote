@@ -252,18 +252,13 @@ export default function App() {
   const [lakeMemos, setLakeMemos] = useState([])
   const [lakeLoading, setLakeLoading] = useState(true)
   const [lakeInputText, setLakeInputText] = useState('')
-  const [lakePdfText, setLakePdfText] = useState('')
-  const [lakePdfName, setLakePdfName] = useState('')
-  const [lakePdfExtracting, setLakePdfExtracting] = useState(false)
+  const [lakeFiles, setLakeFiles] = useState([])
   const [lakeGenerating, setLakeGenerating] = useState(false)
   const [lakeError, setLakeError] = useState('')
   const [isDragging, setIsDragging] = useState(false)
   const [lakeVisibleCount, setLakeVisibleCount] = useState(10)
-  const [lakeExpandedIds, setLakeExpandedIds] = useState(new Set())
-  const [lakeImageBase64, setLakeImageBase64] = useState('')
-  const [lakeImageMimeType, setLakeImageMimeType] = useState('')
-  const [lakeImagePreview, setLakeImagePreview] = useState('')
   const lakeFileInputRef = useRef(null)
+  const lakeFileIdCounter = useRef(0)
 
   const ideaPrices = useIdeaPrices(ideaGroups)
 
@@ -518,11 +513,6 @@ export default function App() {
   const sortedLakeMemos = [...lakeMemos].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
   const visibleLakeMemos = sortedLakeMemos.slice(0, lakeVisibleCount)
   const hasMoreLakeMemos = sortedLakeMemos.length > lakeVisibleCount
-  const toggleLakeExpand = (id) => setLakeExpandedIds(prev => {
-    const next = new Set(prev)
-    next.has(id) ? next.delete(id) : next.add(id)
-    return next
-  })
 
   const extractTextFromPDF = async (file) => {
     const pdfjsLib = await import('pdfjs-dist')
@@ -539,95 +529,105 @@ export default function App() {
   }
 
   const clearFileState = () => {
-    setLakePdfName('')
-    setLakePdfText('')
-    setLakePdfExtracting(false)
-    setLakeImageBase64('')
-    setLakeImageMimeType('')
-    setLakeImagePreview('')
+    setLakeFiles([])
     if (lakeFileInputRef.current) lakeFileInputRef.current.value = ''
+  }
+
+  const removeFile = (id) => {
+    setLakeFiles(prev => prev.filter(f => f.id !== id))
   }
 
   const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif']
   const MAX_FILE_SIZE = 7 * 1024 * 1024
 
-  const handleImageFile = (file) => {
-    if (!IMAGE_TYPES.includes(file.type)) {
-      setLakeError('PNG, JPEG, WebP, HEIC 이미지만 지원됩니다.')
-      return
-    }
-    if (file.size > MAX_FILE_SIZE) {
-      setLakeError('파일이 너무 큽니다 (최대 7MB)')
-      return
-    }
-    setLakeError('')
-    setLakePdfName('')
-    setLakePdfText('')
+  const readFileAsDataURL = (file) => new Promise((resolve, reject) => {
     const reader = new FileReader()
-    reader.onload = () => {
-      const dataUrl = reader.result
-      const isHeic = file.type === 'image/heic' || file.type === 'image/heif'
-      setLakeImagePreview(isHeic ? '' : dataUrl)
-      setLakeImageBase64(dataUrl.split(',')[1])
-      setLakeImageMimeType(file.type)
-      setLakePdfName(file.name)
-    }
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = reject
     reader.readAsDataURL(file)
-  }
+  })
 
-  const handlePdfFile = async (file) => {
-    if (file.size > MAX_FILE_SIZE) {
-      setLakeError('파일이 너무 큽니다 (최대 7MB)')
-      return
-    }
-    setLakePdfName(file.name)
-    setLakePdfText('')
-    setLakeImageBase64('')
-    setLakeImageMimeType('')
-    setLakeImagePreview('')
+  const handleFiles = async (files) => {
     setLakeError('')
-    setLakePdfExtracting(true)
-    try {
-      const text = await extractTextFromPDF(file)
-      if (!text.trim()) {
-        setLakeError('PDF에서 텍스트를 추출할 수 없습니다. 텍스트 기반 PDF만 지원됩니다.')
-        setLakePdfName('')
-        setLakePdfExtracting(false)
-        return
+    const errors = []
+    const newEntries = []
+    const pdfJobs = []
+
+    for (const file of files) {
+      const id = ++lakeFileIdCounter.current
+      const isPdf = file.type === 'application/pdf'
+      const isImage = IMAGE_TYPES.includes(file.type)
+
+      if (!isPdf && !isImage) {
+        errors.push(`${file.name}: 지원하지 않는 형식`)
+        continue
       }
-      setLakePdfText(text)
-    } catch (err) {
-      console.error('PDF extraction error:', err)
-      setLakeError('PDF에서 텍스트를 추출할 수 없습니다.')
-      setLakePdfName('')
+      if (file.size > MAX_FILE_SIZE) {
+        errors.push(`${file.name}: 파일 크기 초과 (최대 7MB)`)
+        continue
+      }
+
+      if (isPdf) {
+        newEntries.push({ id, name: file.name, type: 'pdf', extracting: true })
+        pdfJobs.push({ id, file })
+      } else {
+        const imageEntry = await readFileAsDataURL(file).then(dataUrl => {
+          const isHeic = file.type === 'image/heic' || file.type === 'image/heif'
+          return {
+            id, name: file.name, type: 'image',
+            base64: dataUrl.split(',')[1],
+            mimeType: file.type,
+            preview: isHeic ? '' : dataUrl,
+          }
+        }).catch(() => {
+          errors.push(`${file.name}: 이미지 읽기 실패`)
+          return null
+        })
+        if (imageEntry) newEntries.push(imageEntry)
+      }
     }
-    setLakePdfExtracting(false)
+
+    if (newEntries.length > 0) {
+      setLakeFiles(prev => [...prev, ...newEntries])
+    }
+
+    for (const { id, file } of pdfJobs) {
+      try {
+        const text = await extractTextFromPDF(file)
+        if (!text.trim()) {
+          errors.push(`${file.name}: 텍스트 추출 불가`)
+          setLakeFiles(prev => prev.filter(f => f.id !== id))
+          continue
+        }
+        setLakeFiles(prev => prev.map(f => f.id === id ? { ...f, text, extracting: false } : f))
+      } catch {
+        errors.push(`${file.name}: PDF 추출 실패`)
+        setLakeFiles(prev => prev.filter(f => f.id !== id))
+      }
+    }
+
+    if (errors.length) setLakeError(errors.join('\n'))
   }
 
-  const handleFileUpload = (file) => {
-    if (!file) return
-    if (file.type === 'application/pdf') {
-      handlePdfFile(file)
-    } else if (IMAGE_TYPES.includes(file.type)) {
-      handleImageFile(file)
-    } else {
-      setLakeError('PDF 또는 이미지 파일(PNG, JPEG, WebP, HEIC)만 지원됩니다.')
-    }
-  }
+  const lakeHasContent = lakeInputText.trim() || lakeFiles.some(f => f.text || f.base64)
+  const lakeExtracting = lakeFiles.some(f => f.extracting)
 
   const handleGenerateLakeMemo = async () => {
-    const inputText = lakePdfText.trim() || lakeInputText.trim()
-    const hasImage = !!lakeImageBase64
-    if (!inputText && !hasImage) return
-    if (!clientRef.current) return
+    if (!lakeHasContent || !clientRef.current) return
     setLakeGenerating(true)
     setLakeError('')
     try {
+      const pdfTexts = lakeFiles.filter(f => f.type === 'pdf' && f.text).map(f => f.text)
+      const images = lakeFiles.filter(f => f.type === 'image' && f.base64).map(f => ({ base64: f.base64, mimeType: f.mimeType }))
+      const allText = [...(lakeInputText.trim() ? [lakeInputText.trim()] : []), ...pdfTexts].join('\n\n---\n\n')
+
       const args = {
-        text: inputText || '(이미지 참조)',
-        ...(hasImage && { imageBase64: lakeImageBase64, imageMimeType: lakeImageMimeType }),
+        text: allText || '(이미지 참조)',
+        ...(images.length > 0 && { imagesJson: JSON.stringify(images) }),
       }
+      console.log('[Lake] mutation args:', { text: args.text.slice(0, 200), hasImagesJson: !!args.imagesJson, imageCount: images.length, textLength: args.text.length })
       const { data: result, errors } = await clientRef.current.mutations.generateLakeMemo(args)
+      console.log('[Lake] mutation result:', { data: result, errors })
       if (errors?.length) throw new Error(errors[0].message)
       await clientRef.current.models.LakeMemo.create({
         title: result.title,
@@ -637,8 +637,14 @@ export default function App() {
       setLakeInputText('')
       clearFileState()
     } catch (err) {
-      console.error('Generate memo error:', err)
-      setLakeError('메모 생성에 실패했습니다. 다시 시도해주세요.')
+      console.error('[Lake] Generate memo error:', err)
+      const raw = err?.message || String(err)
+      const userMsg = raw.includes('503') || raw.includes('429')
+        ? 'AI 서버가 일시적으로 혼잡합니다. 잠시 후 다시 시도해주세요.'
+        : raw.includes('404')
+        ? 'AI 서비스 설정 오류가 발생했습니다.'
+        : '메모 생성에 실패했습니다. 다시 시도해주세요.'
+      setLakeError(userMsg)
     }
     setLakeGenerating(false)
   }
@@ -705,14 +711,41 @@ export default function App() {
                 <p className="text-sm text-slate-400 mt-1">뉴스, 리포트, 리서치 자료 등을 넣으면 AI가 한국어 투자 메모로 정리합니다</p>
               </div>
               <div className="p-6 space-y-4">
-                {!lakePdfName && (
-                  <textarea
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700 placeholder-slate-300 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition resize-none leading-relaxed"
-                    rows={6}
-                    placeholder="리서치 자료, 뉴스 기사, 보고서 등의 텍스트를 붙여넣으세요..."
-                    value={lakeInputText}
-                    onChange={e => { setLakeInputText(e.target.value); setLakeError('') }}
-                  />
+                <textarea
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700 placeholder-slate-300 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition resize-none leading-relaxed"
+                  rows={4}
+                  placeholder="리서치 자료, 뉴스 기사, 보고서 등의 텍스트를 붙여넣으세요..."
+                  value={lakeInputText}
+                  onChange={e => { setLakeInputText(e.target.value); setLakeError('') }}
+                />
+
+                {lakeFiles.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-slate-500">{lakeFiles.length}개 파일 첨부됨</p>
+                      <button onClick={clearFileState} className="text-xs text-slate-400 hover:text-red-400 transition-colors">전체 삭제</button>
+                    </div>
+                    {lakeFiles.map(f => (
+                      <div key={f.id} className="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2">
+                        <span className="text-sm shrink-0">{f.type === 'image' ? '🖼️' : '📄'}</span>
+                        {f.preview && <img src={f.preview} alt="" className="h-8 rounded shrink-0" />}
+                        <span className="text-sm text-slate-700 truncate flex-1">{f.name}</span>
+                        {f.extracting && (
+                          <span className="flex items-center gap-1 shrink-0">
+                            <span className="w-3 h-3 border-2 border-emerald-300 border-t-emerald-600 rounded-full animate-spin" />
+                            <span className="text-xs text-slate-400">추출 중</span>
+                          </span>
+                        )}
+                        {!f.extracting && f.type === 'pdf' && f.text && <span className="text-xs text-emerald-500 shrink-0">완료</span>}
+                        {!f.extracting && f.type === 'image' && f.base64 && <span className="text-xs text-emerald-500 shrink-0">완료</span>}
+                        <button onClick={() => removeFile(f.id)} className="text-slate-300 hover:text-red-400 transition-colors shrink-0 p-0.5">
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
+                            <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
 
                 <div
@@ -721,81 +754,50 @@ export default function App() {
                   onDrop={e => {
                     e.preventDefault()
                     setIsDragging(false)
-                    const file = e.dataTransfer.files[0]
-                    if (file) handleFileUpload(file)
+                    const dropped = Array.from(e.dataTransfer.files)
+                    if (dropped.length) handleFiles(dropped)
                   }}
-                  onClick={() => !lakePdfName && lakeFileInputRef.current?.click()}
-                  className={`border-2 border-dashed rounded-xl px-4 text-center transition-all ${
-                    lakePdfName
-                      ? 'border-emerald-300 bg-emerald-50/50 py-6 cursor-default'
-                      : isDragging
-                      ? 'border-blue-400 bg-blue-50 py-5 cursor-pointer'
-                      : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50 py-5 cursor-pointer'
+                  onClick={() => lakeFileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-xl px-4 py-4 text-center transition-all cursor-pointer ${
+                    isDragging
+                      ? 'border-blue-400 bg-blue-50'
+                      : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                   }`}
                 >
-                  {lakePdfName ? (
-                    <div className="flex flex-col items-center gap-2">
-                      {lakeImagePreview ? (
-                        <img src={lakeImagePreview} alt="preview" className="max-h-32 rounded-lg" />
-                      ) : null}
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-emerald-700 font-semibold">
-                          {lakeImageBase64 ? '🖼️' : '📄'} {lakePdfName}
-                        </span>
-                        <button
-                          onClick={e => { e.stopPropagation(); clearFileState() }}
-                          className="text-slate-400 hover:text-red-400 transition-colors p-0.5"
-                        >
-                          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
-                            <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                          </svg>
-                        </button>
-                      </div>
-                      {lakePdfExtracting ? (
-                        <div className="flex items-center gap-1.5">
-                          <div className="w-3 h-3 border-2 border-emerald-300 border-t-emerald-600 rounded-full animate-spin" />
-                          <span className="text-xs text-emerald-500">텍스트 추출 중...</span>
-                        </div>
-                      ) : lakePdfText ? (
-                        <span className="text-xs text-emerald-500 font-medium">✓ PDF 첨부 완료</span>
-                      ) : lakeImageBase64 ? (
-                        <span className="text-xs text-emerald-500 font-medium">✓ 이미지 첨부 완료</span>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div>
-                      <p className="text-sm text-slate-500 mb-1">
-                        {isDragging ? '파일을 놓으세요' : '파일을 드래그하거나 클릭하여 선택'}
-                      </p>
-                      <p className="text-xs text-slate-400">PDF, PNG, JPEG, WebP, HEIC 지원 (최대 7MB)</p>
-                    </div>
-                  )}
+                  <p className="text-sm text-slate-500 mb-1">
+                    {isDragging ? '파일을 놓으세요' : `파일을 드래그하거나 클릭하여 ${lakeFiles.length > 0 ? '추가' : '선택'}`}
+                  </p>
+                  <p className="text-xs text-slate-400">PDF, PNG, JPEG, WebP, HEIC · 여러 파일 선택 가능 (파일당 최대 7MB)</p>
                   <input
                     ref={lakeFileInputRef}
                     type="file"
+                    multiple
                     accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.heif"
                     className="hidden"
                     onChange={e => {
-                      const file = e.target.files?.[0]
-                      if (file) handleFileUpload(file)
+                      const selected = Array.from(e.target.files || [])
+                      e.target.value = ''
+                      if (selected.length) handleFiles(selected)
                     }}
                   />
                 </div>
 
                 {lakeError && (
-                  <p className="text-sm text-red-500 bg-red-50 px-4 py-2 rounded-xl">{lakeError}</p>
+                  <p className="text-sm text-red-500 bg-red-50 px-4 py-2 rounded-xl whitespace-pre-wrap">{lakeError}</p>
                 )}
 
                 <div className="flex justify-end pt-2">
                   <button
                     onClick={handleGenerateLakeMemo}
-                    disabled={(!lakeInputText.trim() && !lakePdfText.trim() && !lakeImageBase64) || lakeGenerating || lakePdfExtracting}
+                    disabled={!lakeHasContent || lakeGenerating || lakeExtracting}
                     className="bg-blue-500 hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-6 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/20 flex items-center gap-2"
                   >
                     {lakeGenerating && (
                       <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                     )}
-                    {lakeGenerating ? 'AI 분석 중...' : 'AI 메모 생성'}
+                    {lakeGenerating
+                      ? `${lakeFiles.length > 0 ? lakeFiles.length + '개 파일 ' : ''}분석 중...`
+                      : 'AI 메모 생성'}
                   </button>
                 </div>
               </div>
@@ -825,10 +827,8 @@ export default function App() {
               ) : (
                 <>
                   <div className="space-y-4">
-                    {visibleLakeMemos.map(memo => {
-                      const isExpanded = lakeExpandedIds.has(memo.id)
-                      return (
-                        <div key={memo.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5 sm:px-6 sm:py-6 hover:shadow-md transition-all group">
+                    {visibleLakeMemos.map(memo => (
+                        <div key={memo.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-4 sm:px-6 sm:py-5 hover:shadow-md transition-all group">
                           <div className="flex items-start justify-between mb-2">
                             <h3 className="text-base font-bold text-slate-800 leading-snug pr-4">{memo.title}</h3>
                             <div className="flex items-center gap-2 shrink-0">
@@ -847,33 +847,19 @@ export default function App() {
                               </button>
                             </div>
                           </div>
-                          <p className="text-sm text-slate-600 leading-relaxed line-clamp-3">{memo.summary}</p>
-
-                          {isExpanded && (
-                            <div className="bg-slate-50 rounded-xl px-4 py-4 sm:px-5 mt-4">
-                              <p className="text-xs font-semibold text-slate-500 mb-3">Key Points</p>
-                              <ul className="space-y-2.5">
-                                {(() => {
-                                  try { return JSON.parse(memo.keyPoints) } catch { return [] }
-                                })().map((point, i) => (
-                                  <li key={i} className="flex items-start gap-2.5 text-sm text-slate-800 leading-relaxed">
-                                    <span className="text-blue-500 mt-0.5 shrink-0 font-bold">•</span>
-                                    <span>{point}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-
-                          <button
-                            onClick={() => toggleLakeExpand(memo.id)}
-                            className="mt-3 text-xs text-blue-500 hover:text-blue-600 font-medium transition-colors"
-                          >
-                            {isExpanded ? '접기' : '자세히 보기'}
-                          </button>
+                          <p className="text-sm text-slate-500 leading-relaxed line-clamp-2 mb-3">{memo.summary}</p>
+                          <ul className="space-y-1.5">
+                            {(() => {
+                              try { return JSON.parse(memo.keyPoints) } catch { return [] }
+                            })().map((point, i) => (
+                              <li key={i} className="flex items-start gap-2 text-sm text-slate-700 leading-snug">
+                                <span className="text-blue-500 mt-0.5 shrink-0">•</span>
+                                <span>{point}</span>
+                              </li>
+                            ))}
+                          </ul>
                         </div>
-                      )
-                    })}
+                    ))}
                   </div>
 
                   {hasMoreLakeMemos && (
@@ -957,12 +943,12 @@ export default function App() {
                             </span>
                           </div>
                           {memo.thesis && (
-                            <p className="text-sm text-slate-700 mb-1">
+                            <p className="text-sm text-slate-700 mb-1 whitespace-pre-wrap">
                               <span className="font-medium text-slate-400">투자논리: </span>{memo.thesis}
                             </p>
                           )}
                           {memo.risk && (
-                            <p className="text-sm text-slate-700">
+                            <p className="text-sm text-slate-700 whitespace-pre-wrap">
                               <span className="font-medium text-slate-400">리스크: </span>{memo.risk}
                             </p>
                           )}
@@ -1286,8 +1272,8 @@ export default function App() {
                           </div>
                           {openMemo && (
                             <div className="mb-3 space-y-1">
-                              <p className="text-sm text-slate-500 truncate"><span className="text-slate-400 text-xs">논리: </span>{openMemo.thesis}</p>
-                              <p className="text-sm text-slate-500 truncate"><span className="text-slate-400 text-xs">리스크: </span>{openMemo.risk}</p>
+                              <p className="text-sm text-slate-500 whitespace-pre-wrap line-clamp-2"><span className="text-slate-400 text-xs">논리: </span>{openMemo.thesis}</p>
+                              <p className="text-sm text-slate-500 whitespace-pre-wrap line-clamp-2"><span className="text-slate-400 text-xs">리스크: </span>{openMemo.risk}</p>
                             </div>
                           )}
                           <div className="flex items-center gap-3 text-xs text-slate-400 pt-2.5 border-t border-slate-50">
@@ -1563,7 +1549,7 @@ export default function App() {
                           </div>
                         </div>
                         <p className="text-sm text-slate-400 mb-1 font-medium">{s.category}</p>
-                        {s.memo && <p className="text-base text-slate-800 font-medium leading-relaxed mb-3">{s.memo}</p>}
+                        {s.memo && <p className="text-base text-slate-800 font-medium leading-relaxed mb-3 whitespace-pre-wrap">{s.memo}</p>}
                         <div className="flex items-center justify-between pt-2.5 border-t border-slate-50 mt-auto">
                           <div>
                             {linkedIdea && (
@@ -1660,7 +1646,7 @@ export default function App() {
                                 </svg>
                               </button>
                             </div>
-                            {s.memo && <p className="text-base text-slate-700 mt-1 leading-snug">{s.memo}</p>}
+                            {s.memo && <p className="text-base text-slate-700 mt-1 leading-snug whitespace-pre-wrap">{s.memo}</p>}
                           </div>
                         )
                       })}

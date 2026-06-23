@@ -65,8 +65,7 @@ const schema = a.schema({
     .mutation()
     .arguments({
       text: a.string().required(),
-      imageBase64: a.string(),
-      imageMimeType: a.string(),
+      imagesJson: a.string(),
     })
     .returns(a.ref('GeneratedMemo'))
     .handler(a.handler.function(generateLakeMemo))

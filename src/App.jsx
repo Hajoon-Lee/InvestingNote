@@ -514,20 +514,6 @@ export default function App() {
   const visibleLakeMemos = sortedLakeMemos.slice(0, lakeVisibleCount)
   const hasMoreLakeMemos = sortedLakeMemos.length > lakeVisibleCount
 
-  const extractTextFromPDF = async (file) => {
-    const pdfjsLib = await import('pdfjs-dist')
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
-    const arrayBuffer = await file.arrayBuffer()
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
-    let text = ''
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i)
-      const content = await page.getTextContent()
-      text += content.items.map(item => item.str).join(' ') + '\n'
-    }
-    return text
-  }
-
   const clearFileState = () => {
     setLakeFiles([])
     if (lakeFileInputRef.current) lakeFileInputRef.current.value = ''
@@ -537,7 +523,7 @@ export default function App() {
     setLakeFiles(prev => prev.filter(f => f.id !== id))
   }
 
-  const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif']
+  const SUPPORTED_TYPES = ['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif']
   const MAX_FILE_SIZE = 7 * 1024 * 1024
 
   const readFileAsDataURL = (file) => new Promise((resolve, reject) => {
@@ -551,14 +537,11 @@ export default function App() {
     setLakeError('')
     const errors = []
     const newEntries = []
-    const pdfJobs = []
 
     for (const file of files) {
       const id = ++lakeFileIdCounter.current
-      const isPdf = file.type === 'application/pdf'
-      const isImage = IMAGE_TYPES.includes(file.type)
 
-      if (!isPdf && !isImage) {
+      if (!SUPPORTED_TYPES.includes(file.type)) {
         errors.push(`${file.name}: 지원하지 않는 형식`)
         continue
       }
@@ -567,65 +550,42 @@ export default function App() {
         continue
       }
 
-      if (isPdf) {
-        newEntries.push({ id, name: file.name, type: 'pdf', extracting: true })
-        pdfJobs.push({ id, file })
-      } else {
-        const imageEntry = await readFileAsDataURL(file).then(dataUrl => {
-          const isHeic = file.type === 'image/heic' || file.type === 'image/heif'
-          return {
-            id, name: file.name, type: 'image',
-            base64: dataUrl.split(',')[1],
-            mimeType: file.type,
-            preview: isHeic ? '' : dataUrl,
-          }
-        }).catch(() => {
-          errors.push(`${file.name}: 이미지 읽기 실패`)
-          return null
+      try {
+        const dataUrl = await readFileAsDataURL(file)
+        const isPdf = file.type === 'application/pdf'
+        const isHeic = file.type === 'image/heic' || file.type === 'image/heif'
+        newEntries.push({
+          id, name: file.name,
+          type: isPdf ? 'pdf' : 'image',
+          base64: dataUrl.split(',')[1],
+          mimeType: file.type,
+          preview: (!isPdf && !isHeic) ? dataUrl : '',
         })
-        if (imageEntry) newEntries.push(imageEntry)
+      } catch {
+        errors.push(`${file.name}: 파일 읽기 실패`)
       }
     }
 
     if (newEntries.length > 0) {
       setLakeFiles(prev => [...prev, ...newEntries])
     }
-
-    for (const { id, file } of pdfJobs) {
-      try {
-        const text = await extractTextFromPDF(file)
-        if (!text.trim()) {
-          errors.push(`${file.name}: 텍스트 추출 불가`)
-          setLakeFiles(prev => prev.filter(f => f.id !== id))
-          continue
-        }
-        setLakeFiles(prev => prev.map(f => f.id === id ? { ...f, text, extracting: false } : f))
-      } catch {
-        errors.push(`${file.name}: PDF 추출 실패`)
-        setLakeFiles(prev => prev.filter(f => f.id !== id))
-      }
-    }
-
     if (errors.length) setLakeError(errors.join('\n'))
   }
 
-  const lakeHasContent = lakeInputText.trim() || lakeFiles.some(f => f.text || f.base64)
-  const lakeExtracting = lakeFiles.some(f => f.extracting)
+  const lakeHasContent = lakeInputText.trim() || lakeFiles.some(f => f.base64)
 
   const handleGenerateLakeMemo = async () => {
     if (!lakeHasContent || !clientRef.current) return
     setLakeGenerating(true)
     setLakeError('')
     try {
-      const pdfTexts = lakeFiles.filter(f => f.type === 'pdf' && f.text).map(f => f.text)
-      const images = lakeFiles.filter(f => f.type === 'image' && f.base64).map(f => ({ base64: f.base64, mimeType: f.mimeType }))
-      const allText = [...(lakeInputText.trim() ? [lakeInputText.trim()] : []), ...pdfTexts].join('\n\n---\n\n')
+      const filePayloads = lakeFiles.filter(f => f.base64).map(f => ({ base64: f.base64, mimeType: f.mimeType }))
 
       const args = {
-        text: allText || '(이미지 참조)',
-        ...(images.length > 0 && { imagesJson: JSON.stringify(images) }),
+        text: lakeInputText.trim() || '(파일 참조)',
+        ...(filePayloads.length > 0 && { imagesJson: JSON.stringify(filePayloads) }),
       }
-      console.log('[Lake] mutation args:', { text: args.text.slice(0, 200), hasImagesJson: !!args.imagesJson, imageCount: images.length, textLength: args.text.length })
+      console.log('[Lake] mutation args:', { textLength: args.text.length, fileCount: filePayloads.length })
       const { data: result, errors } = await clientRef.current.mutations.generateLakeMemo(args)
       console.log('[Lake] mutation result:', { data: result, errors })
       if (errors?.length) throw new Error(errors[0].message)
@@ -730,14 +690,7 @@ export default function App() {
                         <span className="text-sm shrink-0">{f.type === 'image' ? '🖼️' : '📄'}</span>
                         {f.preview && <img src={f.preview} alt="" className="h-8 rounded shrink-0" />}
                         <span className="text-sm text-slate-700 truncate flex-1">{f.name}</span>
-                        {f.extracting && (
-                          <span className="flex items-center gap-1 shrink-0">
-                            <span className="w-3 h-3 border-2 border-emerald-300 border-t-emerald-600 rounded-full animate-spin" />
-                            <span className="text-xs text-slate-400">추출 중</span>
-                          </span>
-                        )}
-                        {!f.extracting && f.type === 'pdf' && f.text && <span className="text-xs text-emerald-500 shrink-0">완료</span>}
-                        {!f.extracting && f.type === 'image' && f.base64 && <span className="text-xs text-emerald-500 shrink-0">완료</span>}
+                        {f.base64 && <span className="text-xs text-emerald-500 shrink-0">완료</span>}
                         <button onClick={() => removeFile(f.id)} className="text-slate-300 hover:text-red-400 transition-colors shrink-0 p-0.5">
                           <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
                             <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
@@ -789,7 +742,7 @@ export default function App() {
                 <div className="flex justify-end pt-2">
                   <button
                     onClick={handleGenerateLakeMemo}
-                    disabled={!lakeHasContent || lakeGenerating || lakeExtracting}
+                    disabled={!lakeHasContent || lakeGenerating}
                     className="bg-blue-500 hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-6 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-500/20 flex items-center gap-2"
                   >
                     {lakeGenerating && (
